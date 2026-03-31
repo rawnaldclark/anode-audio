@@ -42,7 +42,7 @@
  *      - Passive Fender-style EQ (fixed Treble=0, Bass=10, Mid~6)
  *      - Compensates for Stage 1's 707Hz bass rolloff
  *      - Significant insertion loss (~10-15dB)
- *      - Modeled as: gentle LP (~3kHz) + mid-range shelving
+ *      - Modeled as: low shelf -3dB@200Hz + Butterworth LP@1.8kHz + 12dB loss
  *
  *   4. Second discrete op-amp gain stage (Q13/Q14 + Q12):
  *      - Gain: 0-40dB via GAIN2 pot (second section of dual-gang)
@@ -195,18 +195,20 @@ public:
             // Recombine: clipped highs + clean bass
             x = xHigh + xLow;
 
-            // ---- Inter-stage tone stack (passive Fender-style) ----
-            // Modeled as gentle LP at ~3kHz with ~10dB insertion loss.
-            // The real circuit is a complex passive network; we approximate
-            // its net effect: treble reduction + level drop.
+            // Inter-stage tone stack: 2-biquad cascade (Fender-style passive network)
             double xts = static_cast<double>(x);
-            toneStackLpState_ = (1.0 - toneStackLpCoeff_) * xts
-                              + toneStackLpCoeff_ * toneStackLpState_;
-            toneStackLpState_ = fast_math::denormal_guard(toneStackLpState_);
-            x = static_cast<float>(toneStackLpState_);
-
-            // Insertion loss of passive tone stack (~10dB = 0.316x)
-            x *= 0.316f;
+            // Biquad 1: Low shelf -3dB at 200Hz
+            double ts1Out = tsB0_1_ * xts + tsB1_1_ * tsX1_1_ + tsB2_1_ * tsX2_1_
+                          - tsA1_1_ * tsY1_1_ - tsA2_1_ * tsY2_1_;
+            tsX2_1_ = tsX1_1_; tsX1_1_ = xts;
+            tsY2_1_ = tsY1_1_; tsY1_1_ = fast_math::denormal_guard(ts1Out);
+            // Biquad 2: Butterworth LP at 1.8kHz
+            double ts2Out = tsB0_2_ * ts1Out + tsB1_2_ * tsX1_2_ + tsB2_2_ * tsX2_2_
+                          - tsA1_2_ * tsY1_2_ - tsA2_2_ * tsY2_2_;
+            tsX2_2_ = tsX1_2_; tsX1_2_ = ts1Out;
+            tsY2_2_ = tsY1_2_; tsY1_2_ = fast_math::denormal_guard(ts2Out);
+            x = static_cast<float>(tsY2_2_);
+            x *= 0.25f;  // -12dB insertion loss
 
             // Store pre-oversampled signal for Stage 2
             preOsBuffer_[i] = x;
@@ -309,8 +311,9 @@ public:
         // Stage 1 LPF: 3kHz (C5 ~100pF treble rolloff)
         stage1LpCoeff_ = computeOnePoleLPCoeff(3000.0, fs);
 
-        // Inter-stage tone stack: gentle LP at ~3kHz
-        toneStackLpCoeff_ = computeOnePoleLPCoeff(3000.0, fs);
+        // Inter-stage tone stack: 2-biquad cascade (Fender-style passive network)
+        computeLowShelf(200.0, -3.0, 0.707, fs, tsB0_1_, tsB1_1_, tsB2_1_, tsA1_1_, tsA2_1_);
+        computeButterworthLP(1800.0, fs, tsB0_2_, tsB1_2_, tsB2_2_, tsA1_2_, tsA2_2_);
 
         // Tone control LP path: ~1kHz
         toneLpCoeff_ = computeOnePoleLPCoeff(1000.0, fs);
@@ -337,8 +340,9 @@ public:
         stage1HpPrev_ = 0.0;
         stage1LpState_ = 0.0;
 
-        // Inter-stage tone stack
-        toneStackLpState_ = 0.0;
+        // Inter-stage tone stack biquad cascade
+        tsX1_1_ = tsX2_1_ = tsY1_1_ = tsY2_1_ = 0.0;
+        tsX1_2_ = tsX2_2_ = tsY1_2_ = tsY2_2_ = 0.0;
 
         // Tone control
         toneLpState_ = 0.0;
@@ -461,6 +465,61 @@ private:
     }
 
     /**
+     * Compute low shelf biquad coefficients (Audio EQ Cookbook).
+     *
+     * @param fc  Shelf frequency in Hz.
+     * @param gainDb Gain in dB (negative for cut).
+     * @param Q  Quality factor.
+     * @param fs Sample rate in Hz.
+     * @param b0,b1,b2,a1,a2 Output coefficients (normalized by a0).
+     */
+    static void computeLowShelf(double fc, double gainDb, double Q, double fs,
+                                double& b0, double& b1, double& b2,
+                                double& a1, double& a2) {
+        const double A = std::pow(10.0, gainDb / 40.0);
+        const double w0 = 2.0 * M_PI * fc / fs;
+        const double sinw = std::sin(w0);
+        const double cosw = std::cos(w0);
+        const double alpha = sinw / (2.0 * Q);
+        const double sqrtA2alpha = 2.0 * std::sqrt(A) * alpha;
+
+        const double a0_raw = (A + 1.0) + (A - 1.0) * cosw + sqrtA2alpha;
+        const double inv_a0 = 1.0 / a0_raw;
+
+        b0 = A * ((A + 1.0) - (A - 1.0) * cosw + sqrtA2alpha) * inv_a0;
+        b1 = 2.0 * A * ((A - 1.0) - (A + 1.0) * cosw) * inv_a0;
+        b2 = A * ((A + 1.0) - (A - 1.0) * cosw - sqrtA2alpha) * inv_a0;
+        a1 = -2.0 * ((A - 1.0) + (A + 1.0) * cosw) * inv_a0;
+        a2 = ((A + 1.0) + (A - 1.0) * cosw - sqrtA2alpha) * inv_a0;
+    }
+
+    /**
+     * Compute 2nd-order Butterworth low-pass biquad coefficients (Q=0.7071).
+     *
+     * @param fc Cutoff frequency in Hz.
+     * @param fs Sample rate in Hz.
+     * @param b0,b1,b2,a1,a2 Output coefficients (normalized by a0).
+     */
+    static void computeButterworthLP(double fc, double fs,
+                                     double& b0, double& b1, double& b2,
+                                     double& a1, double& a2) {
+        const double w0 = 2.0 * M_PI * fc / fs;
+        const double sinw = std::sin(w0);
+        const double cosw = std::cos(w0);
+        constexpr double Q = 0.7071067811865476;  // 1/sqrt(2)
+        const double alpha = sinw / (2.0 * Q);
+
+        const double a0_raw = 1.0 + alpha;
+        const double inv_a0 = 1.0 / a0_raw;
+
+        b0 = ((1.0 - cosw) / 2.0) * inv_a0;
+        b1 = (1.0 - cosw) * inv_a0;
+        b2 = b0;
+        a1 = (-2.0 * cosw) * inv_a0;
+        a2 = (1.0 - alpha) * inv_a0;
+    }
+
+    /**
      * Compute gyrator peaking biquad coefficients.
      *
      * The BD-2 output stage uses a gyrator (R25, R26, C21, C22) to create
@@ -539,7 +598,14 @@ private:
 
     double stage1HpCoeff_ = 0.9;     ///< Stage 1 HPF (707Hz, C4/R5 in feedback)
     double stage1LpCoeff_ = 0.0;     ///< Stage 1 LPF (3kHz, C5 treble rolloff)
-    double toneStackLpCoeff_ = 0.0;  ///< Inter-stage tone stack (~3kHz LP)
+    // Inter-stage tone stack biquad cascade
+    double tsB0_1_ = 1.0, tsB1_1_ = 0.0, tsB2_1_ = 0.0;
+    double tsA1_1_ = 0.0, tsA2_1_ = 0.0;
+    double tsX1_1_ = 0.0, tsX2_1_ = 0.0, tsY1_1_ = 0.0, tsY2_1_ = 0.0;
+
+    double tsB0_2_ = 1.0, tsB1_2_ = 0.0, tsB2_2_ = 0.0;
+    double tsA1_2_ = 0.0, tsA2_2_ = 0.0;
+    double tsX1_2_ = 0.0, tsX2_2_ = 0.0, tsY1_2_ = 0.0, tsY2_2_ = 0.0;
     double toneLpCoeff_ = 0.0;       ///< Tone control LP path (~1kHz)
     double toneHpCoeff_ = 0.99;      ///< Tone control HP path (~1kHz)
     double dcBlockCoeff_ = 0.999;    ///< DC blocker (10Hz)
@@ -556,9 +622,6 @@ private:
 
     /** Stage 1 low-pass (3kHz treble limit) */
     double stage1LpState_ = 0.0;
-
-    /** Inter-stage tone stack LP */
-    double toneStackLpState_ = 0.0;
 
     /** Tone control LP path */
     double toneLpState_ = 0.0;
