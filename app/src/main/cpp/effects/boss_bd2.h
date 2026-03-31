@@ -316,8 +316,8 @@ public:
         // DC blocker at 10Hz (sample-rate adaptive)
         dcBlockCoeff_ = computeOnePoleHPCoeff(10.0, fs);
 
-        // Gyrator biquad: peaking filter at 120Hz, +6dB, Q~1.5
-        computeGyrator(120.0, 6.0, 1.5, fs);
+        // Gyrator biquad: peaking filter at 120Hz, +6dB, Q~2.2 (R25 series ~1.2K)
+        computeGyrator(120.0, 6.0, 2.2, fs);
     }
 
     /**
