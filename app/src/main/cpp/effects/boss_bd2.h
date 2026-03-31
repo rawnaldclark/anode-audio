@@ -52,7 +52,7 @@
  *
  *   5. Tone control:
  *      - Passive treble cut (C100=18nF, TONE pot 250KA)
- *      - Modeled as tilt EQ: 0=dark, 0.5=flat, 1=bright
+ *      - Variable-cutoff LP: fc=8.8kHz (dark) to 35Hz (bright = LP drops out)
  *
  *   6. Output stage (IC1a M5218AL):
  *      - Gyrator bass boost: +6dB peak at ~120Hz
@@ -137,11 +137,6 @@ public:
         // Input scaling: guitar signal (~0.1-0.5Vpp) into circuit operating
         // at 8V supply with 4V bias. Scale to realistic circuit voltages.
         constexpr float kInputScale = 4.0f;
-
-        // Tone: tilt EQ crossfade. tone=0 => dark (LP dominant),
-        // tone=1 => bright (HP dominant), tone=0.5 => roughly flat.
-        const float toneLP = 1.0f - tone;
-        const float toneHP = tone;
 
         // Output level with audio taper (250KA pot)
         const float outputGain = level * level;
@@ -243,21 +238,18 @@ public:
         for (int i = 0; i < numFrames; ++i) {
             float x = postOsBuffer_[i];
 
-            // ---- Tone control (passive treble cut, C100=18nF) ----
-            // Low-pass path
+            // Tone control: variable-cutoff LP (C100=18nF, TONE pot 250KA)
+            // At high resistance (tone=1/bright): fc=35Hz, LP drops out of circuit
+            // At low resistance (tone=0/dark): fc=8.8kHz, mild treble cut
+            float R_tone = 1000.0f + tone * tone * 249000.0f;
+            float fc_tone = 1.0f / (6.2831853f * R_tone * 18.0e-9f);
+            fc_tone = std::max(30.0f, std::min(fc_tone, static_cast<float>(sampleRate_) * 0.49f));
+            double toneCoeff = std::exp(-2.0 * M_PI * static_cast<double>(fc_tone)
+                                        / static_cast<double>(sampleRate_));
             double xd = static_cast<double>(x);
-            toneLpState_ = (1.0 - toneLpCoeff_) * xd
-                         + toneLpCoeff_ * toneLpState_;
+            toneLpState_ = (1.0 - toneCoeff) * xd + toneCoeff * toneLpState_;
             toneLpState_ = fast_math::denormal_guard(toneLpState_);
-
-            // High-pass path
-            double toneHpOut = toneHpCoeff_ * (toneHpState_ + xd - toneHpPrev_);
-            toneHpPrev_ = xd;
-            toneHpState_ = fast_math::denormal_guard(toneHpOut);
-
-            // Tilt EQ crossfade
-            float toned = static_cast<float>(
-                toneLP * toneLpState_ + toneHP * toneHpState_);
+            float toned = static_cast<float>(toneLpState_);
 
             // ---- Gyrator bass boost (+6dB at ~120Hz) ----
             // Modeled as a 2nd-order biquad peaking filter.
@@ -315,11 +307,7 @@ public:
         computeLowShelf(200.0, -3.0, 0.707, fs, tsB0_1_, tsB1_1_, tsB2_1_, tsA1_1_, tsA2_1_);
         computeButterworthLP(1800.0, fs, tsB0_2_, tsB1_2_, tsB2_2_, tsA1_2_, tsA2_2_);
 
-        // Tone control LP path: ~1kHz
-        toneLpCoeff_ = computeOnePoleLPCoeff(1000.0, fs);
-
-        // Tone control HP path: ~1kHz
-        toneHpCoeff_ = computeOnePoleHPCoeff(1000.0, fs);
+        // Tone control: computed per-sample (variable cutoff)
 
         // DC blocker at 10Hz (sample-rate adaptive)
         dcBlockCoeff_ = computeOnePoleHPCoeff(10.0, fs);
@@ -346,8 +334,6 @@ public:
 
         // Tone control
         toneLpState_ = 0.0;
-        toneHpState_ = 0.0;
-        toneHpPrev_ = 0.0;
 
         // Gyrator biquad
         gyrX1_ = gyrX2_ = gyrY1_ = gyrY2_ = 0.0;
@@ -575,7 +561,7 @@ private:
      *  Default 0.5 gives moderate blues crunch. */
     std::atomic<float> gain_{0.5f};
 
-    /** Tone [0, 1]. Tilt EQ: 0=dark, 0.5=flat, 1=bright.
+    /** Tone [0, 1]. Variable LP: 0=dark (8.8kHz cutoff), 1=bright (LP drops out).
      *  Default 0.5 is the neutral "noon" position. */
     std::atomic<float> tone_{0.5f};
 
@@ -609,8 +595,6 @@ private:
     double tsB0_2_ = 1.0, tsB1_2_ = 0.0, tsB2_2_ = 0.0;
     double tsA1_2_ = 0.0, tsA2_2_ = 0.0;
     double tsX1_2_ = 0.0, tsX2_2_ = 0.0, tsY1_2_ = 0.0, tsY2_2_ = 0.0;
-    double toneLpCoeff_ = 0.0;       ///< Tone control LP path (~1kHz)
-    double toneHpCoeff_ = 0.99;      ///< Tone control HP path (~1kHz)
     double dcBlockCoeff_ = 0.999;    ///< DC blocker (10Hz)
 
     // Gyrator biquad coefficients (peaking +6dB at 120Hz)
@@ -628,10 +612,6 @@ private:
 
     /** Tone control LP path */
     double toneLpState_ = 0.0;
-
-    /** Tone control HP path */
-    double toneHpState_ = 0.0;
-    double toneHpPrev_ = 0.0;
 
     /** Gyrator biquad state (direct form II transposed) */
     double gyrX1_ = 0.0, gyrX2_ = 0.0;
