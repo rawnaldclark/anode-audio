@@ -150,7 +150,7 @@ public:
         // The gyrator boosts 120Hz by +6dB (2x), and the clipping stages
         // output signals in the ~0.5-1.0V range (normalized). Scale down
         // to prevent downstream clipping.
-        constexpr float kOutputScale = 0.7f;
+        constexpr float kOutputScale = 0.18f;
 
         // ------------------------------------------------------------------
         // Per-sample: pre-clipping filtering and Stage 1
@@ -407,33 +407,36 @@ private:
     // =========================================================================
 
     /**
-     * Model the asymmetric clipping behavior of the BD-2's discrete op-amp.
+     * Circuit-accurate JFET asymmetric clipping model.
      *
-     * The discrete op-amp clips differently on positive and negative swings:
+     * The BD-2's discrete op-amp clips differently on each rail:
      *
      *   Positive swing (PNP output stage Q9/Q12 saturating against V+ rail):
-     *     - Harder clipping (PNP collector-emitter saturation is abrupt)
-     *     - Modeled with fast_tanh at higher drive (1.2x) for sharper knee
+     *     - Hard knee at ~0.3V (PNP Vce_sat)
+     *     - Output headroom ~3.85V (V+ rail minus bias)
+     *     - Modeled as fast_tanh with scaled drive
      *
      *   Negative swing (JFET differential pair pinching off):
-     *     - Softer clipping (JFET square-law: Id = Idss*(1-Vgs/Vp)^2)
-     *     - More gradual, creates 2nd-harmonic-dominant distortion
-     *     - Modeled with fast_tanh at lower drive (0.85x) + slight gain (1.05x)
-     *       to model the asymmetry that generates even harmonics
+     *     - Soft knee at ~0.8V (JFET pinchoff voltage Vp)
+     *     - Cubic S-curve: 1.5*t - 0.5*t^3 (square-law approximation)
+     *     - Output limited to 2*Vp = 1.6V
      *
-     * The asymmetry between positive and negative half-cycles is what gives
-     * the BD-2 its tube-like warmth (even harmonics) and touch sensitivity.
+     * Asymmetry ratio: 3.85/1.6 = 2.67:1 (generates strong even harmonics).
+     * This asymmetry is what gives the BD-2 its tube-like warmth.
      *
      * @param x Input signal (in circuit voltage domain).
-     * @return Clipped signal.
+     * @return Clipped signal (range approximately [-1.6, +3.85]).
      */
     static inline float jfetClip(float x) {
+        constexpr float kVp = 0.8f;
+        constexpr float kHeadroom = 3.85f;
+        constexpr float kPnpDrive = 1.0f / (kHeadroom * 0.4f);
         if (x >= 0.0f) {
-            // PNP rail saturation: harder clip
-            return fast_math::fast_tanh(x * 1.2f);
+            return kHeadroom * fast_math::fast_tanh(x * kPnpDrive);
         } else {
-            // JFET pinchoff: softer clip with asymmetric gain
-            return fast_math::fast_tanh(x * 0.85f) * 1.05f;
+            float t = std::min(std::abs(x) / (2.0f * kVp), 1.0f);
+            float y = 1.5f * t - 0.5f * t * t * t;
+            return -(2.0f * kVp) * y;
         }
     }
 
