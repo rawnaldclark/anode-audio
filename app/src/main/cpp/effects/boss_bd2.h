@@ -190,6 +190,8 @@ public:
             // Recombine: clipped highs + clean bass
             x = xHigh + xLow;
 
+            x = diodeShuntClip(x, 0.25f);  // D3/D4: single 1SS133 pair
+
             // Inter-stage tone stack: 2-biquad cascade (Fender-style passive network)
             double xts = static_cast<double>(x);
             // Biquad 1: Low shelf -3dB at 200Hz
@@ -225,6 +227,8 @@ public:
             // This stage clips FIRST at moderate gain because it receives
             // the pre-boosted, tone-shaped signal from Stage 1.
             x = jfetClip(x);
+
+            x = diodeShuntClip(x, 0.30f);  // D7-D10: two parallel 1SS133 pairs
 
             upsampled[i] = x;
         }
@@ -424,6 +428,34 @@ private:
             float y = 1.5f * t - 0.5f * t * t * t;
             return -(2.0f * kVp) * y;
         }
+    }
+
+    // =========================================================================
+    // 1SS133 Diode Shunt Clipping
+    // =========================================================================
+
+    /**
+     * Model the 1SS133 silicon diode shunt clippers in the BD-2 circuit.
+     *
+     * D3/D4 (single pair) after Stage 1, D7-D10 (two parallel pairs) after
+     * Stage 2. These clip signal to ground at ~0.55V forward voltage,
+     * shaping the sweet spot at 20-40% gain range where rail saturation
+     * hasn't yet engaged.
+     *
+     * @param x Input signal.
+     * @param softness Knee softness (0.25 for single pair, 0.30 for double).
+     * @return Clipped signal.
+     */
+    static inline float diodeShuntClip(float x, float softness) {
+        constexpr float kVf = 0.55f;
+        constexpr float kOnset = 0.3f;
+        float absX = std::abs(x);
+        if (absX < kOnset) return x;
+        float sign = (x >= 0.0f) ? 1.0f : -1.0f;
+        float excess = absX - kOnset;
+        float knee = kVf * softness;
+        float limited = kOnset + knee * fast_math::fast_tanh(excess / knee);
+        return sign * limited;
     }
 
     // =========================================================================
