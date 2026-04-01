@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Simple guitar pick-shaped notification icon for the foreground service.
+     Uses a monochrome design as required by Android notification guidelines. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24"
+    android:tint="#FFFFFF">
+
+    <!-- Simplified guitar body outline -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M12,2C8.69,2 6,4.69 6,8c0,2.21 1.19,4.14 2.97,5.18L8,22h8l-0.97,-8.82C16.81,12.14 18,10.21 18,8c0,-3.31 -2.69,-6 -6,-6zM12,11c-1.66,0 -3,-1.34 -3,-3s1.34,-3 3,-3s3,1.34 3,3S13.66,11 12,11z" />
+</vector>

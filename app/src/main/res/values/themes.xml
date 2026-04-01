@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Base theme for GuitarEmulator. Uses a dark NoActionBar theme since
+         Compose manages all theming and the app uses a dark UI. -->
+    <style name="Theme.GuitarEmulator" parent="android:Theme.Material.NoActionBar">
+        <!-- Compose manages its own theming, so we keep the XML theme minimal.
+             The NoActionBar parent is required since we use a Compose TopAppBar. -->
+    </style>
+</resources>

@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">GuitarEmulator</string>
+    <string name="notification_channel_name">Audio Processing</string>
+    <string name="notification_channel_description">Ongoing notification while audio engine is active</string>
+    <string name="notification_title">GuitarEmulator</string>
+    <string name="notification_text">Audio engine is running</string>
+    <string name="btn_start_engine">Start Engine</string>
+    <string name="btn_stop_engine">Stop Engine</string>
+    <string name="label_input_level">Input Level</string>
+    <string name="label_output_level">Output Level</string>
+    <string name="label_input_source">Input Source</string>
+    <string name="input_source_phone_mic">Phone Microphone</string>
+    <string name="input_source_analog">Analog Adapter</string>
+    <string name="input_source_usb">USB Audio</string>
+</resources>

@@ -1,0 +1,52 @@
+# Gradle
+.gradle/
+build/
+!gradle/wrapper/gradle-wrapper.jar
+
+# Kotlin
+.kotlin/
+
+# IDE
+.idea/
+*.iml
+
+# Local config
+local.properties
+
+# Build outputs
+*.apk
+*.aab
+*.ap_
+*.dex
+
+# NDK
+.cxx/
+obj/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Misc
+*.log
+nul
+
+# Dev tool config
+.claude/
+.superpowers/
+
+# Local build/test artifacts
+build_output.txt
+test_output.txt
+run_install.ps1
+temp_build.bat
+
+# Research docs (not for distribution)
+RESEARCH_*.md
+
+# Screenshots
+screenshot*.png
+ss_*.png
+
+# Stray files with mangled paths
+C?UsersthenoProjects*
