@@ -186,12 +186,21 @@ public:
             //   G_effective = G / (1 + G * I_diode * R_load / V_signal)
             //
             // Newton-Raphson converges in 3-4 iterations with warm start.
+            //
+            // Safety: The exp() function overflows float at arg > ~88.7.
+            // With kInvNVt_ = 22.08, any |Vout| > 4.02 causes overflow → Inf → NaN.
+            // Large input transients can push NR far from the solution on the first
+            // iteration, causing Vout to overshoot into the overflow region.
+            // Three guards prevent this:
+            //   1. Clamp v_nVt before exp() to [-20, +20] (exp(20) = 4.85e8, safe)
+            //   2. Clamp Vout after each iteration to [-2, +2] (real 1N914 ≤ 0.7V)
+            //   3. NaN check on diodeState_ after loop (last-resort safety net)
             float Vin = x;
             float Vout = diodeState_;  // warm start from previous sample
 
             for (int iter = 0; iter < 4; ++iter) {
-                // sinh(Vout / (n*Vt)) and cosh(Vout / (n*Vt))
-                float v_nVt = Vout * kInvNVt_;
+                // Guard A: clamp exp argument to prevent float overflow
+                float v_nVt = std::max(-20.0f, std::min(20.0f, Vout * kInvNVt_));
                 float exp_pos = std::exp(v_nVt);
                 float exp_neg = 1.0f / exp_pos;  // exp(-v_nVt)
                 float sinh_v = 0.5f * (exp_pos - exp_neg);
@@ -205,7 +214,13 @@ public:
 
                 // Newton step
                 Vout -= f / fp;
+
+                // Guard B: clamp Vout to physically reasonable diode voltage range
+                Vout = std::max(-2.0f, std::min(2.0f, Vout));
             }
+
+            // Guard C: NaN/Inf safety net — prevent corruption cascade via warm start
+            if (!std::isfinite(Vout)) Vout = 0.0f;
 
             diodeState_ = Vout;  // save for warm start
             upsampled[i] = Vout;
