@@ -4,7 +4,6 @@
 #include "effect.h"
 #include "oversampler.h"
 #include "fast_math.h"
-#include <chowdsp_wdf/chowdsp_wdf.h>
 #include <atomic>
 #include <cmath>
 #include <algorithm>
@@ -66,13 +65,22 @@
  *   Q1  = OC44     PNP germanium transistor (Is~200uA, Vt~26mV)
  *   Range pot = 10K (varies effective emitter impedance)
  *
- * Germanium transistor characteristics:
- *   The OC44 germanium transistor has a much higher saturation current
- *   (Is ~ 5e-6 A) compared to silicon (Is ~ 2.5e-9 A). This means:
- *   - The diode junction conducts much more gradually (soft knee)
- *   - Clipping onset is gentle and progressive, not abrupt
- *   - Even-order harmonics dominate (asymmetric transfer curve)
- *   - The "warm" and "sweet" character that players describe
+ * Clipping model — asymmetric germanium transistor (OC44):
+ *   The OC44 PNP transistor clips asymmetrically in the common-emitter stage:
+ *   - Positive output swing (toward Vcc): transistor approaches cutoff —
+ *     soft, gradual clipping as the device simply stops conducting.
+ *   - Negative output swing (toward ground): transistor saturates
+ *     (Vce_sat ~ 0.1V) — harder, more abrupt clipping.
+ *   This asymmetry generates even-order harmonics (2nd, 4th) which are the
+ *   source of the "warm, sweet" Rangemaster character. Modeled with a
+ *   dual-slope tanh waveshaper (2:1 drive ratio, negative-side scaling).
+ *
+ * Gain model — C2 bypass cap effect:
+ *   The 47uF emitter bypass cap (C2) shorts R4 (3.9K) for all audio
+ *   frequencies: fc = 1/(2*pi*3900*47e-6) = 0.87 Hz. Therefore AC gain
+ *   is Av = R3 / (r_e + R_range) where r_e ~ 58 ohm (Vt/Ic = 26mV/0.45mA).
+ *   At max range (R_range=0): Av = 10K/58 = 172x (45dB). This is essential
+ *   for driving the germanium clipper into meaningful soft clipping.
  *
  * Anti-aliasing strategy:
  *   2x oversampling around the nonlinear germanium clipping stage. The
@@ -88,7 +96,6 @@
  * References:
  *   - Electrosmash: https://www.electrosmash.com/dallas-rangemaster
  *   - R.G. Keen, "The Technology of the Dallas Rangemaster"
- *   - chowdsp_wdf: https://github.com/Chowdhury-DSP/chowdsp_wdf
  */
 class Rangemaster : public Effect {
 public:
@@ -105,7 +112,7 @@ public:
      *   Input -> Treble emphasis high-pass (C1 = 4.7nF, models guitar impedance)
      *         -> Pre-gain (transistor amplification, Range-dependent)
      *         -> 2x Upsample
-     *         -> WDF Germanium Clipper (soft Ge clipping, OC44 transistor)
+     *         -> Asymmetric Ge transistor clipper (OC44 cutoff/saturation model)
      *         -> 2x Downsample
      *         -> Output coupling high-pass (C3 = 10uF, ~3Hz DC block)
      *         -> Output volume
@@ -133,48 +140,35 @@ public:
         // Range controls the effective emitter resistance, which determines
         // the voltage gain of the common-emitter stage.
         //
-        // In the original circuit, the Range pot (10K) is in series with R4
-        // (3.9K emitter resistor). Turning the pot up REDUCES the total
-        // emitter impedance (pot resistance shorts to ground through C2),
-        // which INCREASES gain.
+        // With C2 bypass cap (47uF, fc=0.87Hz), R4 is shorted for AC.
+        // AC gain = R3 / (r_e + R_range_remaining)
+        // r_e = Vt/Ic ~ 26mV/0.45mA ~ 58 ohm (OC44 at typical bias point)
         //
-        // Voltage gain: Av = -R3 / (R4 + R_range_remaining)
-        //   range=0 (pot fully CCW): R_emitter = 3.9K + 10K = 13.9K, Av ~ 0.7
-        //   range=0.5:               R_emitter ~ 3.9K + 5K = 8.9K,  Av ~ 1.1
-        //   range=1 (pot fully CW):  R_emitter ~ 3.9K (bypassed),   Av ~ 2.6
+        // The Range pot (10K) varies the un-bypassed emitter resistance:
+        //   range=0 (pot fully CCW): R_range = 10K, Av = 10K/(58+10K) ~ 1.0
+        //   range=0.5:               R_range = 5K,  Av = 10K/(58+5K)  ~ 2.0
+        //   range=1 (pot fully CW):  R_range = 0,   Av = 10K/58       ~ 172
         //
-        // With the emitter bypass cap (C2=47uF), AC gain at treble frequencies
-        // is much higher because C2 shorts R4 for AC signals above ~1Hz:
-        //   fc_bypass = 1 / (2*pi*R4*C2) = 1 / (2*pi*3900*47e-6) ~ 0.87 Hz
-        //
-        // So at audio frequencies, the gain is primarily set by R3 and the
-        // remaining pot resistance:
-        //   AC gain at range=1: Av ~ R3 / r_e ~ 10K / 26 ohm ~ 385 (52 dB)
-        //   (where r_e = Vt/Ic ~ 26mV/1mA ~ 26 ohm is the transistor's
-        //    intrinsic emitter resistance)
-        //
-        // We map range [0,1] to a practical gain range that produces the
-        // expected treble boost character: moderate boost at low settings,
-        // progressively more drive at higher settings.
-        const float rangeResistance = 10.0e3f * (1.0f - range); // Remaining pot R
-        const float emitterR = 3.9e3f + rangeResistance;
-        const float acGain = 10.0e3f / emitterR; // R3 / R_emitter
+        // This is the correct gain model: the 47uF C2 bypass cap eliminates
+        // R4 from the AC signal path, leaving only r_e and the Range pot.
+        constexpr float kRe = 58.0f;  // transistor intrinsic emitter resistance
+        const float rangeResistance = 10.0e3f * (1.0f - range);
+        const float acGain = 10.0e3f / (kRe + rangeResistance);
 
-        // Scale the input to realistic circuit voltage levels for the WDF.
-        // Guitar signal is ~100mV peak; the transistor stage amplifies this
-        // to a few volts. The WDF expects voltages in the range where the
-        // Ge diode model is accurate (roughly 0-2V for germanium).
-        constexpr float kInputScaling = 2.0f;
+        // Scale to drive the Ge clipper appropriately.
+        // Guitar signal ~100-300mV peak. With acGain up to 172x, the signal
+        // can reach very high amplitudes. We reduce the input scaling because
+        // the gain is now much higher than the old (incorrect) model.
+        constexpr float kInputScaling = 0.15f;
         const float preClipGain = acGain * kInputScaling;
 
         // Output volume with audio taper for natural feel.
         // Audio taper: volume^2 maps [0,1] to perceptually linear loudness.
         const float outputGain = volume * volume;
 
-        // Post-clipping output scaling: the WDF Ge clipper outputs voltages
-        // that are lower than silicon (Ge forward voltage ~ 0.3V vs 0.7V).
-        // Normalize back to [-1, 1] audio range.
-        constexpr float kOutputScaling = 1.0f / 0.35f;
+        // Post-clipping output scaling: the Ge clipper outputs in roughly
+        // [-1, 1] range (tanh bounded). Scale to appropriate output level.
+        constexpr float kOutputScaling = 1.8f;
 
         // ------------------------------------------------------------------
         // Per-sample processing: treble emphasis + gain stage
@@ -218,18 +212,17 @@ public:
         }
 
         // ------------------------------------------------------------------
-        // WDF Germanium Clipping with 2x oversampling
+        // Asymmetric Ge transistor clipping with 2x oversampling
         // ------------------------------------------------------------------
         const int oversampledLen = oversampler_.getOversampledSize(numFrames);
         float* upsampled = oversampler_.upsample(preOsBuffer_.data(), numFrames);
 
-        // Process each oversampled sample through the WDF Ge clipper.
-        // Double precision for numerical stability in the diode equation
-        // solver (Wright Omega approximation).
+        // Process each oversampled sample through the asymmetric Ge clipper.
+        // The OC44 PNP transistor clips differently on each half-cycle:
+        //   Positive: soft cutoff (transistor stops conducting)
+        //   Negative: harder saturation (Vce bottoms out at ~0.1V)
         for (int i = 0; i < oversampledLen; ++i) {
-            upsampled[i] = static_cast<float>(
-                geClipperCircuit_.processSample(static_cast<double>(upsampled[i]))
-            );
+            upsampled[i] = geTransistorClip(upsampled[i]);
         }
 
         // Downsample back to the original rate
@@ -241,7 +234,7 @@ public:
         for (int i = 0; i < numFrames; ++i) {
             float x = postOsBuffer_[i];
 
-            // Normalize clipped signal back to audio range
+            // Scale clipped signal to appropriate output level
             x *= kOutputScaling;
 
             // ----- Output coupling high-pass (C3 = 10uF) -----
@@ -252,7 +245,7 @@ public:
             //   fc = 1 / (2*pi * 1M * 10e-6) ~ 0.016 Hz
             //
             // We model this at 3 Hz to also serve as a practical DC blocker
-            // that removes any DC offset from the WDF processing.
+            // that removes any DC offset from the clipping stage.
             // Uses double precision: 3Hz HP coefficient is very close to 1.0,
             // and float cannot represent the difference accurately.
             double xd = static_cast<double>(x);
@@ -286,13 +279,6 @@ public:
         // Prepare the 2x oversampler
         oversampler_.prepare(maxFrames);
 
-        // Prepare the WDF clipping circuit at the oversampled rate.
-        // The capacitors in the WDF tree are reactive elements whose
-        // discretization depends on the sample rate (bilinear transform
-        // maps s-domain to z-domain, and the mapping depends on T=1/fs).
-        const double oversampledRate = static_cast<double>(sampleRate) * 2.0;
-        geClipperCircuit_.prepare(oversampledRate);
-
         // Pre-compute fixed filter coefficients. All cutoff frequencies
         // are determined by circuit component values and do not change
         // at runtime. Computing once here avoids std::exp() per block.
@@ -305,13 +291,12 @@ public:
     }
 
     /**
-     * Reset all internal filter and WDF state.
+     * Reset all internal filter state.
      * Called when the audio stream restarts or the effect is re-enabled
      * to prevent stale samples from leaking through as clicks/pops.
      */
     void reset() override {
         oversampler_.reset();
-        geClipperCircuit_.reset();
 
         // Reset all one-pole filter states
         hpTrebleState_ = 0.0;
@@ -361,185 +346,41 @@ public:
 
 private:
     // =========================================================================
-    // WDF Germanium Clipper Sub-Circuit
+    // Asymmetric Germanium Transistor Clipper
     // =========================================================================
 
     /**
-     * Wave Digital Filter model of the Rangemaster's germanium clipping stage.
+     * Asymmetric germanium transistor clipping (OC44 common-emitter).
      *
-     * This models the nonlinear behavior of the OC44 PNP germanium transistor's
-     * collector-emitter junction. The actual transistor is a three-terminal device,
-     * but for the purposes of the audio signal path, the clipping behavior is
-     * dominated by the base-emitter junction's conduction characteristics. We
-     * simplify to a diode pair model with germanium parameters, which captures
-     * the essential soft-clipping character.
+     * The OC44 PNP germanium transistor in the Rangemaster clips differently
+     * on each half of the signal swing:
      *
-     * Circuit topology modeled:
+     * Positive output (toward cutoff): soft, gradual — the transistor simply
+     * stops conducting as the base-emitter voltage drops below threshold.
+     * Modeled with tanh at moderate drive (0.8x).
      *
-     *   Vin ---[ R_source ]---+---[ C_couple (47nF) ]--- GND
-     *                         |
-     *                         +---[ R_collector (10K) ]--- GND
-     *                         |
-     *                     Ge diode pair (OC44 model)
+     * Negative output (toward saturation): harder — the collector-emitter
+     * voltage bottoms out at Vce_sat ~ 0.1V, creating a more abrupt limit.
+     * Modeled with tanh at higher drive (1.6x) and 0.9x amplitude scaling
+     * to reflect the lower Vce_sat headroom.
      *
-     * The source resistance combines the guitar impedance seen through C1 with
-     * R1 (68K base bias). The coupling capacitor (47nF) provides DC blocking
-     * within the WDF tree. The collector load resistor (R3 = 10K) sets the
-     * output impedance and swing range.
+     * The asymmetry ratio of ~2:1 (negative drive / positive drive) generates
+     * even-order harmonics (2nd, 4th) — the "warm, sweet" Rangemaster
+     * character that distinguishes it from symmetric clippers which produce
+     * odd-order harmonics.
      *
-     * WDF tree structure (bottom-up):
-     *
-     *       [DiodePairT] (ROOT -- sole non-adaptable element)
-     *            |
-     *      [WDFParallelT: pOuter]
-     *        /              \
-     *  [Rvs (4.7K)]   [WDFParallelT: pInner]
-     *                    /           \
-     *             [C_couple (47nF)] [R_collector (10K)]
-     *
-     * ResistiveVoltageSourceT combines the input signal and R_source into
-     * a single adapted (non-root) leaf. DiodePairT is the sole root
-     * (non-adaptable nonlinearity, solved via Wright Omega function).
-     *
-     * Germanium diode parameters:
-     *   Is = 5.0e-6 A   (OC44 Ge junction model -- ~2,000x higher than Si)
-     *   Vt = 26e-3 V    (thermal voltage at room temperature, kT/q)
-     *
-     * The extremely high Is value compared to silicon (2.52e-9 A) means the
-     * germanium junction conducts much more gradually. Rather than a sharp
-     * knee at 0.6-0.7V (silicon), germanium starts conducting around 0.15-0.3V
-     * with a very soft, progressive transition. This produces:
-     *   - Gentle onset of clipping (no harsh transition)
-     *   - Lower clipping threshold (~0.3V vs ~0.7V for silicon)
-     *   - Asymmetric even-order harmonics (warm, musical character)
-     *   - Volume-responsive dynamics (cleans up when guitar volume is lowered)
+     * @param x Input sample (pre-amplified signal).
+     * @return Clipped sample with asymmetric germanium character.
      */
-    struct GeClipperCircuit {
-        // --------------------------------------------------------------------
-        // Leaf components
-        // --------------------------------------------------------------------
-
-        /**
-         * Resistive voltage source: combines input signal + R_source.
-         *
-         * R_source = 4.7K represents the combined impedance seen by the
-         * clipping junction: the collector-side source impedance plus
-         * the emitter resistance contribution. This value is chosen to
-         * produce the correct signal swing and clipping behavior in the
-         * WDF simulation.
-         */
-        chowdsp::wdft::ResistiveVoltageSourceT<double> rvs { 4700.0 };
-
-        /**
-         * DC-blocking coupling capacitor, 47nF.
-         *
-         * This models the AC coupling within the transistor stage. In the
-         * actual circuit, C2 (47uF emitter bypass) and the transistor's
-         * internal capacitances provide frequency-dependent behavior.
-         * We use 47nF in the WDF to provide appropriate high-pass behavior
-         * within the WDF tree (fc ~ 72 Hz with R_source), ensuring the
-         * WDF doesn't accumulate DC from the diode model.
-         */
-        chowdsp::wdft::CapacitorT<double> cCouple { 47.0e-9 };
-
-        /**
-         * Collector load resistor, 10K ohm (R3 in the original circuit).
-         *
-         * This sets the output impedance and voltage swing range of the
-         * transistor stage. In a common-emitter amplifier, the collector
-         * load determines maximum output voltage swing: Vswing = Ic * R3.
-         */
-        chowdsp::wdft::ResistorT<double> rCollector { 10.0e3 };
-
-        // --------------------------------------------------------------------
-        // WDF tree adaptors
-        // --------------------------------------------------------------------
-
-        /** Inner parallel: cCouple || rCollector (both to ground from junction) */
-        chowdsp::wdft::WDFParallelT<double,
-            decltype(cCouple), decltype(rCollector)> pInner { cCouple, rCollector };
-
-        /** Outer parallel: rvs || pInner (the circuit junction node) */
-        chowdsp::wdft::WDFParallelT<double,
-            decltype(rvs), decltype(pInner)> pOuter { rvs, pInner };
-
-        // --------------------------------------------------------------------
-        // Root nonlinearity (ONLY non-adaptable element)
-        // --------------------------------------------------------------------
-
-        /**
-         * Germanium diode pair (models OC44 transistor junction clipping).
-         * SOLE root of the WDF tree. Solved via Wright Omega function.
-         *
-         *   Is = 5.0e-6 A  (Ge junction model, ~2,000x higher than silicon)
-         *   Vt = 26e-3 V   (thermal voltage at room temperature)
-         *
-         * The high Is value produces the characteristic germanium soft-clipping:
-         * gradual onset around 0.15V, full conduction by ~0.3V. This contrasts
-         * with silicon's sharp knee at 0.6V. The result is warm, musical
-         * compression with rich even-order harmonics.
-         */
-        chowdsp::wdft::DiodePairT<double, decltype(pOuter)> dp {
-            pOuter, 5.0e-6, 26.0e-3, 1.3
-        };
-
-        // --------------------------------------------------------------------
-        // Lifecycle methods
-        // --------------------------------------------------------------------
-
-        /**
-         * Prepare the WDF circuit for a given sample rate.
-         * Must be called before processSample(). The capacitor's
-         * discretization (bilinear transform: s -> 2/T * (z-1)/(z+1))
-         * depends on the sample period T = 1/sampleRate.
-         *
-         * @param sampleRate Sample rate in Hz (should be the oversampled rate).
-         */
-        void prepare(double sampleRate) {
-            cCouple.prepare(sampleRate);
-            dp.calcImpedance();
+    static inline float geTransistorClip(float x) {
+        if (x >= 0.0f) {
+            // Cutoff side: soft, gradual (transistor stops conducting)
+            return fast_math::fast_tanh(x * 0.8f);
+        } else {
+            // Saturation side: harder clip (Vce_sat ~ 0.1V)
+            return fast_math::fast_tanh(x * 1.6f) * 0.9f;
         }
-
-        /**
-         * Reset the internal state of all reactive WDF elements.
-         * Capacitors store state (voltage from previous sample) via the
-         * bilinear transform discretization. Resetting clears this state
-         * to prevent artifacts when the effect restarts.
-         */
-        void reset() {
-            cCouple.reset();
-        }
-
-        /**
-         * Process a single sample through the WDF germanium clipper.
-         *
-         * Wave propagation sequence:
-         *   1. Set the input voltage on the voltage source
-         *   2. Reflect waves from the parallel junction up to the diode pair
-         *   3. The diode pair computes its reflected wave (nonlinear solve)
-         *   4. Propagate the reflected wave back down to the parallel junction
-         *   5. Read the output voltage across the coupling capacitor
-         *
-         * The output is taken across cCouple, which provides DC blocking
-         * and a natural frequency-dependent roll-off.
-         *
-         * @param x Input voltage (amplified guitar signal after treble emphasis).
-         * @return Output voltage after germanium clipping, approximately +/-0.3V.
-         */
-        inline double processSample(double x) {
-            rvs.setVoltage(x);
-
-            // Propagate waves: reflected wave travels up from pOuter to
-            // the diode pair, which computes the scattered (reflected)
-            // wave via Wright Omega, then propagates back down.
-            dp.incident(pOuter.reflected());
-            pOuter.incident(dp.reflected());
-
-            // Read output voltage across the coupling capacitor.
-            // This gives us the clipped signal with DC blocking.
-            return chowdsp::wdft::voltage<double>(cCouple);
-        }
-    };
+    }
 
     // =========================================================================
     // One-Pole Filter Coefficient Computation
@@ -605,9 +446,6 @@ private:
      * providing ample headroom for the soft germanium clipping harmonics.
      */
     Oversampler<2> oversampler_;
-
-    /** WDF germanium clipper sub-circuit (double precision) */
-    GeClipperCircuit geClipperCircuit_;
 
     // ---- Pre-allocated buffers ----
 
