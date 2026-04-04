@@ -4,7 +4,6 @@
 #include "effect.h"
 #include "oversampler.h"
 #include "fast_math.h"
-#include <chowdsp_wdf/chowdsp_wdf.h>
 #include <atomic>
 #include <cmath>
 #include <algorithm>
@@ -49,7 +48,7 @@
  *   Guitar --[C1=2.2uF]--+--[R1=33K]-- GND
  *                         |
  *                    [Q1: AC128 PNP, beta~75]
- *                    (common-emitter, WDF gain ~3x)
+ *                    (common-emitter, gain ~6x with feedback)
  *                         |
  *                    [R3=8.2K collector load]
  *                         |
@@ -67,39 +66,38 @@
  *                         |
  *                    [C3=10nF]--[Rvol=500K]-- Output
  *
- * WDF Implementation Strategy:
+ * Implementation Strategy (direct asymmetric Ge transistor models):
  *
- *   The full 2-transistor circuit with mutual feedback (R4 from Q2 collector
- *   to Q1 base) creates a delay-free loop that cannot be directly modeled
- *   with a standard WDF binary tree. Options include R-type adaptors or
- *   iterative solvers, both of which are too expensive for mobile real-time.
+ *   Previous versions used WDF DiodePair elements to model the transistors.
+ *   A DiodePair is two symmetric passive clippers — it produces odd harmonics
+ *   from symmetric clipping, not the even harmonics characteristic of real
+ *   transistor amplifier stages. Real CE-configured germanium transistors
+ *   clip asymmetrically: soft toward cutoff, hard toward saturation.
  *
- *   Instead, we decompose into two cascaded WDF sub-circuits:
+ *   This version uses direct asymmetric clipping functions for each stage:
  *
- *   Stage 1 (Q1): Input coupling + bias network + germanium diode pair
- *     - ResistiveVoltageSource (R_guitar, variable via Guitar Volume)
- *     - C1 (2.2uF input coupling cap)
- *     - R1 (33K bias resistor)
- *     - DiodePairT with Ge parameters (models Q1 collector junction)
- *     - Output = voltage across collector load R3 (rLoad=8.2K)
- *     - Gain ~3x applied externally (drives Ge diode into clipping)
+ *   Stage 1 (Q1): Common-emitter Ge amp (AC128, hFE~75)
+ *     - Moderate gain (~6x with R4 feedback reduction)
+ *     - Soft cutoff on positive excursion (transistor runs out of base current)
+ *     - Harder saturation on negative excursion (Vce_sat ~ 0.1V)
+ *     - Produces characteristic even-harmonic warmth
  *
- *   Stage 2 (Q2): Second gain stage + feedback-controlled clipping
- *     - ResistiveVoltageSource (R3=8.2K, Q1 collector impedance)
- *     - C2 (20uF emitter bypass, sets low-freq behavior)
- *     - R_feedback (variable via Fuzz pot: controls clipping intensity)
- *     - DiodePairT with Ge parameters (models Q2 collector junction)
- *     - Harder clipping due to higher gain stage
+ *   Stage 2 (Q2): Common-emitter Ge amp (AC128, hFE~120)
+ *     - High gain controlled by Fuzz pot (4-25x range)
+ *     - Stronger asymmetric clipping than Q1
+ *     - Bias-dependent gating: at low fuzz, Q2 is biased near cutoff
+ *       so weak signals (note decay) drop below the bias threshold and
+ *       get gated — this is the classic sputtery/velcro Fuzz Face character
  *
- *   The R4 feedback is approximated by reducing Stage 1's effective gain
- *   as a function of the Fuzz parameter. At low fuzz, more negative
- *   feedback reduces the overall gain, mimicking the real circuit's
- *   behavior where R4 stabilizes the bias and reduces signal swing.
+ *   The R4 (100K) feedback is modeled by reducing Q1's effective gain
+ *   as a function of the Fuzz parameter, approximating the real circuit's
+ *   negative feedback loop that stabilizes bias and reduces gain at low
+ *   fuzz settings.
  *
  * Anti-aliasing:
- *   2x oversampling wraps both WDF nonlinear stages. The germanium diodes
- *   generate softer harmonics than silicon (the gradual clipping knee
- *   produces fewer high-order harmonics), so 2x is sufficient.
+ *   2x oversampling wraps both nonlinear clipping stages. Germanium's
+ *   soft clipping generates fewer high-order harmonics than silicon, so
+ *   2x is sufficient for alias rejection on mobile.
  *
  * Parameter IDs (for JNI access):
  *   0 = Fuzz          (0.0 to 1.0) - Feedback/clipping intensity
@@ -118,6 +116,90 @@ public:
     FuzzFace() = default;
 
     // =========================================================================
+    // Asymmetric Germanium Transistor Clipping Models
+    // =========================================================================
+
+    /**
+     * Q1: Common-emitter germanium amplifier (AC128, hFE~75).
+     * Moderate gain stage that feeds Q2.
+     *
+     * Gain: gm * R3 = (Ic/Vt) * R3 ~ (0.5mA/26mV) * 8.2K ~ 158
+     * But biased so collector sits at ~4.5V (half of 9V supply).
+     *
+     * Asymmetric clipping:
+     *   Positive output (toward cutoff): soft -- transistor stops conducting
+     *     gradually as it runs out of base current
+     *   Negative output (toward saturation): harder -- Vce_sat ~ 0.1V,
+     *     collector-emitter bottoms out creating flat-top clipping
+     *
+     * This asymmetry produces even harmonics (2nd, 4th) which give germanium
+     * its characteristic warm, musical distortion character.
+     *
+     * @param x Input signal (pre-amplified by q1Gain).
+     * @return Asymmetrically clipped signal in approximately [-0.85, 1.0].
+     */
+    static inline float geQ1Clip(float x) {
+        if (x >= 0.0f) {
+            // Soft cutoff: transistor gradually stops conducting
+            return fast_math::fast_tanh(x * 0.7f);
+        } else {
+            // Harder saturation: collector-emitter bottoms out at Vce_sat
+            return fast_math::fast_tanh(x * 1.4f) * 0.85f;
+        }
+    }
+
+    /**
+     * Q2: Common-emitter germanium amplifier (AC128, hFE~120).
+     * Main clipping stage with bias-dependent gating.
+     *
+     * Asymmetric clipping (stronger than Q1):
+     *   Positive: soft cutoff (same mechanism, slightly softer coefficient)
+     *   Negative: hard saturation with pronounced flat-top clipping
+     *
+     * Gating: At low signal levels (below biasThreshold), output drops
+     * abruptly to zero -- models Q2 biased near cutoff at low fuzz settings.
+     * This creates the sputtery/velcro Fuzz Face character that players love.
+     * As a note decays, the signal drops below the bias threshold and the
+     * transistor stops amplifying, creating an abrupt cutoff instead of a
+     * natural decay.
+     *
+     * @param x              Input signal (pre-amplified by q2Gain).
+     * @param biasThreshold  Gating threshold [0, ~0.15]. Higher = more gating.
+     * @return Asymmetrically clipped and gated signal.
+     */
+    static inline float geQ2Clip(float x, float biasThreshold) {
+        // Asymmetric soft clipping -- stronger than Q1
+        float clipped;
+        if (x >= 0.0f) {
+            // Soft cutoff: gradual roll-off toward supply rail
+            clipped = fast_math::fast_tanh(x * 0.6f);
+        } else {
+            // Hard saturation: flat-top clipping characteristic
+            // The 2.0x coefficient drives into tanh harder, and 0.8x scaling
+            // models the reduced output swing when transistor saturates
+            clipped = fast_math::fast_tanh(x * 2.0f) * 0.8f;
+        }
+
+        // Gating: signal below bias threshold gets attenuated sharply.
+        // This models Q2 biased near cutoff -- weak signals don't get
+        // amplified because they can't push the transistor past its
+        // operating threshold.
+        //
+        // biasThreshold ranges from ~0.0 (full fuzz, no gate) to
+        // ~0.15 (low fuzz, strong gate).
+        //
+        // Quadratic taper provides a smooth transition rather than a
+        // hard gate, matching the gradual turn-on of a real Ge transistor.
+        float absClipped = std::abs(clipped);
+        if (absClipped < biasThreshold) {
+            float t = absClipped / (biasThreshold + 1e-10f);  // avoid div-by-zero
+            clipped *= t * t;  // quadratic fade to zero
+        }
+
+        return clipped;
+    }
+
+    // =========================================================================
     // Effect interface
     // =========================================================================
 
@@ -128,11 +210,11 @@ public:
      *   Input -> Guitar Volume scaling (impedance interaction model)
      *         -> Input coupling high-pass (C1=2.2uF, ~14Hz)
      *         -> 2x Upsample
-     *         -> WDF Stage 1: Q1 germanium clipping (soft, ~3x gain)
-     *         -> WDF Stage 2: Q2 germanium clipping (harder, fuzz-dependent)
+     *         -> Stage 1: Q1 asymmetric Ge clipping (soft cutoff/hard sat)
+     *         -> Stage 2: Q2 asymmetric Ge clipping + bias-dependent gating
      *         -> 2x Downsample
      *         -> Output coupling high-pass (C3=10nF, ~31Hz)
-     *         -> Output volume
+     *         -> Output volume + soft limiting
      *
      * @param buffer   Mono audio samples in [-1.0, 1.0].
      * @param numFrames Number of frames in the buffer.
@@ -164,32 +246,20 @@ public:
         // with increasing series resistance). This:
         //
         //   1. Reduces the signal amplitude entering the fuzz (obvious)
-        //   2. Shifts the WDF source impedance, changing the Thevenin
-        //      equivalent and reducing the voltage delivered to the diodes
+        //   2. Changes the Thevenin equivalent seen by Q1, reducing the
+        //      voltage delivered to the transistor's base
         //   3. Alters the bias point, causing Q1 to operate more linearly
         //
-        // We model this by:
-        //   a) Scaling the input signal amplitude (voltage divider effect)
-        //   b) Increasing the ResistiveVoltageSource impedance for Stage 1
-        //      (source impedance interaction with diode clipping threshold)
+        // We model this by scaling the input signal amplitude (voltage
+        // divider effect with audio taper).
         //
-        // guitarVolume=1.0: R_guitar ~7K (low-Z humbucker into 33K || Rbe)
-        // guitarVolume=0.0: R_guitar ~250K (high series resistance from pot)
+        // guitarVolume=1.0: Full signal, maximum fuzz
+        // guitarVolume=0.0: Signal heavily attenuated, clean/warm overdrive
         //
         // Exponential mapping: guitar pots are audio taper, and the impedance
         // increases nonlinearly as the pot is rolled back.
         const double guitarVol = static_cast<double>(guitarVolume);
         const double inputAttenuation = guitarVol * guitarVol;  // Audio taper
-        const double rGuitar = 7000.0 + (250000.0 - 7000.0)
-                               * (1.0 - guitarVol) * (1.0 - guitarVol);
-
-        // Update the Stage 1 source impedance to reflect guitar volume.
-        // This dynamically changes how the WDF tree interacts with the
-        // germanium diode pair -- higher impedance means the diodes clip
-        // less aggressively (more of the signal appears across the source
-        // resistance rather than being shunted through the diodes).
-        q1Circuit_.rvs.setResistanceValue(rGuitar);
-        q1Circuit_.dp.calcImpedance();
 
         // === Fuzz -> Gain and Feedback Mapping ===
         //
@@ -205,9 +275,7 @@ public:
         //   - Q2's gain is drastically reduced
         //   - R4 feedback dominates, creating the sputtery/gated sound
         //
-        // Stage 1 gain: drives Q1's WDF diodes into clipping.
-        // Reduced from theoretical CE gain (~15x) since output is now
-        // read from rLoad which develops meaningful voltage directly.
+        // Stage 1 gain: drives Q1 into asymmetric clipping.
         // Feedback via R4 reduces effective gain at low fuzz settings.
         const double fuzzD = static_cast<double>(fuzz);
         const double feedbackReduction = 0.3 + 0.7 * fuzzD;
@@ -215,22 +283,21 @@ public:
 
         // Stage 2 gain: models Q2's variable gain controlled by fuzz pot.
         // Q2 is the MAIN gain/clipping stage. A real AC128 with beta=120,
-        // Rc=470 and RE=50 ohm has voltage gain ≈ beta*Rc/(RE+re) ≈ 740.
-        // The WDF rCollector (470 ohm) develops the output signal, but the
-        // Ge diode pair limits output to ~0.15-0.3V. The external gain must
-        // drive the Q2 WDF into meaningful Ge saturation.
+        // Rc=470 and RE=50 ohm has voltage gain ~ beta*Rc/(RE+re) ~ 740.
+        // The asymmetric clipping limits output swing. The external gain
+        // must drive Q2 into meaningful Ge saturation.
         //
         // At full fuzz: gain ~25 (heavy Ge saturation, thick fuzz)
         // At zero fuzz: gain ~4 (mild overdrive, sputtery/gated character)
         // Quadratic taper: fuzz pot sweep matches real pot behavior
         const double q2Gain = 4.0 + (25.0 - 4.0) * fuzzD * fuzzD;
 
-        // Update Stage 2 feedback resistance based on fuzz setting.
-        // Higher Rfuzz = more emitter degeneration = less clipping.
-        // Range: 50 ohm (full fuzz) to 1000 ohm (minimum fuzz).
-        const double rFuzz = 50.0 + (1000.0 - 50.0) * (1.0 - fuzzD);
-        q2Circuit_.rFeedback.setResistanceValue(rFuzz);
-        q2Circuit_.dp.calcImpedance();
+        // Gating threshold: at low fuzz, Q2 is biased near cutoff.
+        // Signals below this threshold get gated (the sputtery/velcro sound).
+        // At full fuzz: threshold = 0 (no gating, full sustain)
+        // At zero fuzz: threshold = 0.15 (strong gating, notes die abruptly)
+        // Quadratic taper matches the gradual bias shift of the real circuit.
+        const float biasThreshold = 0.15f * (1.0f - fuzz) * (1.0f - fuzz);
 
         // === Output Volume ===
         //
@@ -239,18 +306,6 @@ public:
         // Linear mapping with 2x makeup gain gives unity at volume=0.5,
         // matching the RAT's proven gain staging pattern.
         const float outputGain = volume * 2.0f;
-
-        // WDF output normalization: reading voltage across rCollector
-        // (470 ohm) and rLoad (8.2K). Ge diode clipping limits voltage
-        // to ~0.15-0.3V at these nodes. Two cascaded stages with inter-
-        // stage gain produce output in the 0.1-0.3V range after Q2.
-        // A real Fuzz Face outputs 2-5Vpp; we need substantial makeup
-        // gain to bridge from WDF circuit voltages to normalized audio.
-        //
-        // 8.0 brings the ~0.15V Ge-clipped rCollector output up to
-        // ~1.2, which after soft clipping gives a hot, aggressive signal
-        // matching the real pedal's above-unity output character.
-        constexpr double kWdfOutputScaling = 8.0;
 
         // ------------------------------------------------------------------
         // Per-sample pre-processing (before oversampling)
@@ -277,14 +332,14 @@ public:
             // Guitar signal is typically 100-500mV peak. With the Q1 bias
             // network, the signal at Q1's base is a few hundred mV.
             // We scale by a modest amount to bring the normalized audio
-            // signal into the WDF's operating range.
+            // signal into the clipping functions' operating range.
             x *= kInputVoltageScale;
 
             workBuffer_[i] = static_cast<float>(x);
         }
 
         // ------------------------------------------------------------------
-        // Oversampled WDF processing (2x)
+        // Oversampled nonlinear processing (2x)
         // ------------------------------------------------------------------
         const int oversampledLen = oversampler_.getOversampledSize(numFrames);
         float* upsampled = oversampler_.upsample(workBuffer_.data(), numFrames);
@@ -293,48 +348,37 @@ public:
             double x = static_cast<double>(upsampled[i]);
 
             // =============================================================
-            // Stage 1: Q1 Germanium Clipping (first transistor)
+            // Stage 1: Q1 Germanium Amplifier (first transistor)
             // =============================================================
-            // Q1 is biased as a common-emitter amplifier with low gain
-            // (~15x). The germanium transistor's collector-base junction
-            // is modeled by the WDF diode pair. The soft Ge clipping
-            // rounds the peaks gently, adding warmth and even harmonics.
+            // Q1 is biased as a common-emitter amplifier. The asymmetric
+            // Ge clipping rounds positive peaks softly (cutoff) and clips
+            // negative peaks harder (saturation at Vce_sat ~ 0.1V).
+            // This produces the even harmonics (2nd, 4th) characteristic
+            // of germanium — warm and musical, not harsh.
             //
-            // Apply Q1 gain before the WDF clipper (models the voltage
-            // amplification of the CE stage).
+            // feedbackReduction models R4 (100K) negative feedback from
+            // Q2's collector back to Q1's base. At low fuzz, the feedback
+            // reduces Q1's effective gain significantly.
             x *= q1Gain;
-
-            // Safety limiter: prevent extreme voltages from causing WDF
-            // impedance collapse (Ge diodes become near-short above ~5V).
-            x = std::max(-5.0, std::min(5.0, x));
-
-            x = q1Circuit_.processSample(x);
-
-            // NaN guard after WDF (Wright Omega edge cases)
-            if (std::isnan(x) || std::isinf(x)) x = 0.0;
+            x = static_cast<double>(geQ1Clip(static_cast<float>(x)));
 
             // =============================================================
-            // Stage 2: Q2 Germanium Clipping (second transistor)
+            // Stage 2: Q2 Germanium Amplifier (main clipping stage)
             // =============================================================
             // Q2 is the main gain/clipping stage. Its gain is controlled
             // by the FUZZ pot (emitter degeneration). At full fuzz, Q2
-            // clips heavily, producing thick, saturated fuzz. At low fuzz,
-            // Q2 clips less and the R4 feedback creates a compressed,
-            // slightly gated character.
+            // clips heavily with strong asymmetry, producing thick,
+            // saturated fuzz. At low fuzz, Q2's bias point shifts near
+            // cutoff, creating gating behavior where weak signals (note
+            // decay) get cut off abruptly — the classic velcro/sputter.
             x *= q2Gain;
+            x = static_cast<double>(geQ2Clip(static_cast<float>(x), biasThreshold));
 
-            // Safety limiter for Q2 WDF input
-            x = std::max(-5.0, std::min(5.0, x));
-
-            x = q2Circuit_.processSample(x);
-
-            // NaN guard after Q2 WDF
-            if (std::isnan(x) || std::isinf(x)) x = 0.0;
-
-            // Normalize WDF output from rCollector voltage back to
-            // audio range. The load resistor develops meaningful voltage
-            // proportional to clipping current through the Ge diodes.
-            x *= kWdfOutputScaling;
+            // Output scaling: bring Ge-clipped signal back to usable level.
+            // Two stages of asymmetric tanh clipping produce output in
+            // approximately [-0.8, 1.0] range. Makeup gain of 2.5x brings
+            // the signal to a healthy level for the output stage.
+            x *= 2.5;
 
             upsampled[i] = static_cast<float>(x);
         }
@@ -384,10 +428,6 @@ public:
     void setSampleRate(int32_t sampleRate) override {
         sampleRate_ = sampleRate;
 
-        // Compute the oversampled rate for WDF capacitor preparation
-        // and filter coefficient computation.
-        oversampledRate_ = static_cast<double>(sampleRate) * kOversampleFactor;
-
         // Pre-allocate buffers for maximum expected block size.
         // Android audio typically uses 64-480 frame buffers; 2048
         // provides generous headroom. This is the only allocation point.
@@ -395,13 +435,6 @@ public:
 
         // Prepare the 2x oversampler
         oversampler_.prepare(kMaxFrames);
-
-        // Prepare both WDF circuits at the oversampled rate.
-        // The capacitors in the WDF trees are reactive elements whose
-        // discretization depends on the sample rate (bilinear transform
-        // maps s-domain to z-domain, and the mapping depends on T=1/fs).
-        q1Circuit_.prepare(oversampledRate_);
-        q2Circuit_.prepare(oversampledRate_);
 
         // Pre-compute fixed filter coefficients for input/output coupling.
         // These cutoffs are determined by circuit component values and
@@ -424,14 +457,12 @@ public:
     }
 
     /**
-     * Reset all internal filter and WDF state.
+     * Reset all internal filter state.
      * Called when the audio stream restarts or the effect is re-enabled
      * to prevent stale samples from leaking through as clicks/pops.
      */
     void reset() override {
         oversampler_.reset();
-        q1Circuit_.reset();
-        q2Circuit_.reset();
 
         // Reset all one-pole filter states
         inputHPState_  = 0.0;
@@ -507,317 +538,20 @@ private:
     static constexpr int kMaxFrames = 2048;
 
     /** Q1 base gain: common-emitter amplifier gain.
-     *  A real AC128 CE stage with R3=8.2K collector load has gain of
-     *  approximately gm*R3 = (Ic/Vt)*R3 ≈ (1mA/26mV)*8.2K ≈ 315.
-     *  But the WDF diode pair limits the output swing, so we use a
-     *  moderate gain that drives the Ge diodes firmly into their soft
-     *  clipping region without saturating the WDF (which would collapse
-     *  to zero output for Ge Is=5uA).
-     *
-     *  With kInputVoltageScale=0.5, gain=8.0 puts ~4V peak into Q1's
-     *  WDF at full guitar volume, firmly driving the Ge diodes into
-     *  their characteristic soft clipping (~0.15-0.3V output). */
-    static constexpr double kQ1BaseGain = 8.0;
+     *  A real AC128 CE stage with R3=8.2K collector load has theoretical
+     *  gain of gm*R3 = (Ic/Vt)*R3 ~ (0.5mA/26mV)*8.2K ~ 158.
+     *  We use a much lower value because the asymmetric clipping functions
+     *  operate directly on the signal (no WDF impedance network to absorb
+     *  excess gain). With kInputVoltageScale=0.5 and feedbackReduction,
+     *  effective Q1 gain ranges from ~1.8x (low fuzz) to ~6x (full fuzz),
+     *  which drives the Q1 clipper into its characteristic soft region. */
+    static constexpr double kQ1BaseGain = 6.0;
 
     /** Input voltage scaling: maps normalized audio [-1,1] to realistic
      *  guitar signal voltages. A typical humbucker produces ~200-500mV
      *  peak, and single-coils ~100-200mV. We scale to represent the
      *  signal level at Q1's base after the input coupling network. */
     static constexpr double kInputVoltageScale = 0.5;
-
-    // =========================================================================
-    // WDF Q1 Clipping Circuit (First Transistor Stage)
-    // =========================================================================
-
-    /**
-     * Wave Digital Filter model of the Q1 (first transistor) stage.
-     *
-     * This models the input buffer/gain stage of the Fuzz Face. Q1 is
-     * an AC128 germanium PNP transistor operating as a common-emitter
-     * amplifier with moderate gain (~15x). The collector-base junction
-     * behavior is modeled by a germanium diode pair.
-     *
-     * Circuit sub-section:
-     *
-     *   Vin (guitar) ---[R_guitar]---+---[C1=2.2uF]---+
-     *                                |                  |
-     *                           [R1=33K bias]      [R_load=8.2K]
-     *                                |                  |
-     *                               GND            [Ge diodes]
-     *                                                   |
-     *                                                  GND
-     *
-     * WDF tree structure:
-     *
-     *        [DiodePairT] (ROOT -- sole non-adaptable element)
-     *             |
-     *       [WDFParallelT: pOuter]
-     *         /              \
-     *   [Rvs (R_guitar)]  [WDFSeriesT: sInner]
-     *                       /           \
-     *                [C1 (2.2uF)]   [WDFParallelT: pBias]
-     *                                 /           \
-     *                          [R1 (33K)]    [R_load (8.2K)]
-     *
-     * The ResistiveVoltageSource R_guitar is dynamically adjusted based
-     * on the Guitar Volume parameter to model the impedance interaction.
-     *
-     * Germanium diode parameters (AC128 collector-base junction):
-     *   Is = 5.0e-6 A  (germanium junction saturation current)
-     *   Vt = 26e-3 V   (thermal voltage)
-     *   nDiodes = 1.3  (ideality factor for Ge, higher than Si's ~1.0)
-     *
-     * NOTE: Is=5uA models the effective junction clipping behavior of a
-     * Ge transistor in the WDF framework. The original Is=200uA was far
-     * too high -- it caused the DiodePairT to present near-zero impedance
-     * at ANY signal voltage, shorting the signal and producing zero output.
-     * At Is=5uA, the diodes begin conducting around 0.15V and reach full
-     * clipping by ~0.3V, matching the characteristic soft Ge knee.
-     */
-    struct Q1ClipperCircuit {
-        // ---- WDF Leaf Components ----
-
-        /** Resistive voltage source: combines input signal + R_guitar.
-         *  R_guitar is dynamically adjusted based on Guitar Volume param
-         *  to model the pickup-to-fuzz impedance interaction.
-         *  Default 7K represents a low-impedance humbucker at full volume.
-         *  At guitar vol=0, this increases to ~250K, starving the diodes. */
-        chowdsp::wdft::ResistiveVoltageSourceT<double> rvs { 7000.0 };
-
-        /** Input coupling capacitor C1 = 2.2uF.
-         *  Large electrolytic cap passes the full guitar frequency range
-         *  down to ~14Hz. This is unusually large for a guitar pedal
-         *  (most use 47-100nF), preserving deep bass that contributes
-         *  to the Fuzz Face's full, round low-end character. */
-        chowdsp::wdft::CapacitorT<double> c1 { 2.2e-6 };
-
-        /** Input bias resistor R1 = 33K.
-         *  Sets the DC operating point of Q1's base and defines the
-         *  input impedance of the pedal (~33K || Rbe). The relatively
-         *  low value is why the Fuzz Face loads the guitar signal and
-         *  interacts so strongly with the guitar volume pot. */
-        chowdsp::wdft::ResistorT<double> rBias { 33000.0 };
-
-        /** Collector load representing R3 = 8.2K.
-         *  Q1's collector resistor to the -9V supply rail. Sets the
-         *  operating point and provides the load across which the
-         *  amplified signal develops. */
-        chowdsp::wdft::ResistorT<double> rLoad { 8200.0 };
-
-        // ---- WDF Tree Adaptors ----
-
-        /** Inner parallel: rBias || rLoad (both to ground/supply) */
-        chowdsp::wdft::WDFParallelT<double,
-            decltype(rBias), decltype(rLoad)> pBias { rBias, rLoad };
-
-        /** Series: c1 in series with the parallel bias/load network.
-         *  Models C1 in the signal path between the guitar and the
-         *  transistor's base-emitter junction. */
-        chowdsp::wdft::WDFSeriesT<double,
-            decltype(c1), decltype(pBias)> sInner { c1, pBias };
-
-        /** Outer parallel: rvs || sInner (the main circuit junction) */
-        chowdsp::wdft::WDFParallelT<double,
-            decltype(rvs), decltype(sInner)> pOuter { rvs, sInner };
-
-        // ---- Root Nonlinearity ----
-
-        /** Germanium diode pair modeling Q1's collector-base junction.
-         *  SOLE root of the WDF tree (non-adaptable nonlinearity).
-         *
-         *  AC128 Germanium parameters:
-         *    Is = 5.0e-6 A  (Ge junction model; ~2000x higher than Si)
-         *    Vt = 26e-3 V   (thermal voltage at ~25C)
-         *    nDiodes = 1.3  (Ge ideality factor, higher = softer knee)
-         *
-         *  Is=5uA produces gradual clipping onset at ~0.15V, full clip
-         *  by ~0.3V — the characteristic soft germanium sound. */
-        chowdsp::wdft::DiodePairT<double, decltype(pOuter)> dp {
-            pOuter, 5.0e-6, 26.0e-3, 1.3
-        };
-
-        // ---- Lifecycle ----
-
-        /**
-         * Prepare the WDF circuit at the given (oversampled) sample rate.
-         *
-         * @param sampleRate Oversampled sample rate in Hz.
-         */
-        void prepare(double sampleRate) {
-            c1.prepare(sampleRate);
-            dp.calcImpedance();
-        }
-
-        /** Reset all reactive element state to prevent startup artifacts. */
-        void reset() {
-            c1.reset();
-        }
-
-        /**
-         * Process a single sample through the Q1 WDF clipper.
-         *
-         * Wave propagation:
-         *   1. Set input voltage on the resistive voltage source
-         *   2. Reflected waves propagate up from pOuter to diode pair
-         *   3. Diode pair solves nonlinear equation (Wright Omega)
-         *   4. Incident waves propagate back down, updating capacitor state
-         *   5. Output voltage read across the coupling capacitor C1
-         *
-         * @param x Input voltage (pre-amplified guitar signal).
-         * @return Clipped output voltage (~+/-0.3V range for Ge).
-         */
-        inline double processSample(double x) {
-            rvs.setVoltage(x);
-
-            dp.incident(pOuter.reflected());
-            pOuter.incident(dp.reflected());
-
-            // Read output across the collector load resistor (8.2K).
-            // The amplified, Ge-clipped signal develops across rLoad.
-            //
-            // CRITICAL: Previously read from c1 (2.2uF coupling cap) which
-            // has Z = 1/(2*C*fs) = 2.37 ohm at 96kHz — essentially zero
-            // impedance relative to the 8.2K+33K resistive elements. Voltage
-            // across c1 was negligible, producing zero output.
-            //
-            // rLoad (8.2K) is where the collector current develops a
-            // meaningful voltage drop, just like in the real CE amplifier.
-            return chowdsp::wdft::voltage<double>(rLoad);
-        }
-    };
-
-    // =========================================================================
-    // WDF Q2 Clipping Circuit (Second Transistor Stage)
-    // =========================================================================
-
-    /**
-     * Wave Digital Filter model of the Q2 (second transistor) stage.
-     *
-     * Q2 is the main gain/clipping stage. It receives the amplified
-     * output from Q1 and provides further amplification and heavier
-     * germanium clipping. The FUZZ pot controls emitter degeneration
-     * via a variable resistor to ground, modeled here as a variable
-     * feedback resistance in the WDF tree.
-     *
-     * Circuit sub-section:
-     *
-     *   Vin (from Q1) ---[R3=8.2K]---+---[C2=20uF]---+
-     *                                 |                 |
-     *                            [R2=470 ohm]    [Rfuzz=1K pot]
-     *                                 |                 |
-     *                                -9V              GND
-     *                                 |
-     *                            [Ge diodes]
-     *                                 |
-     *                                GND
-     *
-     * WDF tree structure:
-     *
-     *        [DiodePairT] (ROOT -- sole non-adaptable element)
-     *             |
-     *       [WDFParallelT: pOuter]
-     *         /              \
-     *   [Rvs (8.2K)]    [WDFSeriesT: sInner]
-     *                     /           \
-     *              [C2 (20uF)]   [WDFParallelT: pFeedback]
-     *                              /           \
-     *                      [R2 (470)]    [Rfuzz (variable)]
-     *
-     * The Rfuzz resistance is dynamically adjusted based on the Fuzz
-     * parameter. Lower Rfuzz = more emitter bypass = more gain/clipping.
-     *
-     * Same germanium diode parameters as Q1 (AC128):
-     *   Is = 5.0e-6 A, Vt = 26e-3 V, nDiodes = 1.3
-     */
-    struct Q2ClipperCircuit {
-        // ---- WDF Leaf Components ----
-
-        /** Resistive voltage source: R3 = 8.2K (Q1 collector impedance).
-         *  This represents the output impedance of the first stage
-         *  driving into the second stage. */
-        chowdsp::wdft::ResistiveVoltageSourceT<double> rvs { 8200.0 };
-
-        /** Emitter bypass capacitor C2 = 20uF.
-         *  Large electrolytic that bypasses the emitter resistor at
-         *  audio frequencies. The large value ensures full bypass down
-         *  to very low frequencies: fc = 1/(2*pi*1K*20uF) = ~8Hz.
-         *  This means the emitter degeneration is only effective at DC
-         *  (for bias stability), not at audio frequencies. */
-        chowdsp::wdft::CapacitorT<double> c2 { 20.0e-6 };
-
-        /** Collector load R2 = 470 ohm.
-         *  Q2's collector resistor to the -9V supply. The low value
-         *  (compared to Q1's 8.2K) allows Q2 to swing larger currents,
-         *  producing harder clipping. */
-        chowdsp::wdft::ResistorT<double> rCollector { 470.0 };
-
-        /** Fuzz pot (variable emitter resistance): 50-1000 ohm.
-         *  Models the 1K FUZZ pot that controls emitter degeneration.
-         *  Dynamically updated based on the Fuzz parameter.
-         *  Low R = full bypass (max fuzz), High R = degeneration (less fuzz). */
-        chowdsp::wdft::ResistorT<double> rFeedback { 50.0 };
-
-        // ---- WDF Tree Adaptors ----
-
-        /** Inner parallel: rCollector || rFeedback */
-        chowdsp::wdft::WDFParallelT<double,
-            decltype(rCollector), decltype(rFeedback)> pFeedback {
-                rCollector, rFeedback };
-
-        /** Series: c2 in series with the parallel collector/feedback */
-        chowdsp::wdft::WDFSeriesT<double,
-            decltype(c2), decltype(pFeedback)> sInner { c2, pFeedback };
-
-        /** Outer parallel: rvs || sInner */
-        chowdsp::wdft::WDFParallelT<double,
-            decltype(rvs), decltype(sInner)> pOuter { rvs, sInner };
-
-        // ---- Root Nonlinearity ----
-
-        /** Germanium diode pair modeling Q2's collector-base junction.
-         *  Same AC128 parameters as Q1 (Is=5uA, Ge ideality=1.3).
-         *  Q2 typically has higher beta (110-130 vs 70-80), but the
-         *  diode junction characteristics are the same transistor type.
-         *  Higher gain is modeled externally (q2Gain multiplier). */
-        chowdsp::wdft::DiodePairT<double, decltype(pOuter)> dp {
-            pOuter, 5.0e-6, 26.0e-3, 1.3
-        };
-
-        // ---- Lifecycle ----
-
-        void prepare(double sampleRate) {
-            c2.prepare(sampleRate);
-            dp.calcImpedance();
-        }
-
-        void reset() {
-            c2.reset();
-        }
-
-        /**
-         * Process a single sample through the Q2 WDF clipper.
-         *
-         * @param x Input voltage from the Q1 stage (amplified and clipped).
-         * @return Clipped output voltage with heavier germanium saturation.
-         */
-        inline double processSample(double x) {
-            rvs.setVoltage(x);
-
-            dp.incident(pOuter.reflected());
-            pOuter.incident(dp.reflected());
-
-            // Read output across the collector resistor (470 ohm).
-            //
-            // CRITICAL: Previously read from c2 (20uF bypass cap) which
-            // has Z = 1/(2*C*fs) = 0.26 ohm at 96kHz — virtually zero
-            // compared to the 470+variable ohm resistive elements. The
-            // voltage across c2 was negligible, producing zero output.
-            //
-            // rCollector (470 ohm) carries the clipping current and
-            // develops the output voltage of the Q2 amplifier stage.
-            return chowdsp::wdft::voltage<double>(rCollector);
-        }
-    };
 
     // =========================================================================
     // Filter Coefficient Computation
@@ -886,20 +620,11 @@ private:
     /** Device native sample rate in Hz. */
     int32_t sampleRate_ = 44100;
 
-    /** Effective sample rate after oversampling. */
-    double oversampledRate_ = 88200.0;
-
-    /** 2x oversampler for the nonlinear WDF stages.
+    /** 2x oversampler for the nonlinear clipping stages.
      *  Germanium's soft clipping generates fewer high-order harmonics
      *  than silicon hard clipping, so 2x provides adequate alias
      *  rejection while keeping CPU load minimal on mobile ARM. */
     Oversampler<kOversampleFactor> oversampler_;
-
-    /** WDF Q1 clipping circuit (first transistor stage, moderate gain). */
-    Q1ClipperCircuit q1Circuit_;
-
-    /** WDF Q2 clipping circuit (second transistor stage, main clipping). */
-    Q2ClipperCircuit q2Circuit_;
 
     // ---- Pre-allocated buffer ----
 
