@@ -246,18 +246,18 @@ private:
      * R.G. Keen (geofex.com NeoVibe article) measured 50K-250K on
      * originals but recommended 10K-400K for better sweep.
      */
-    static constexpr double kRmin = 10000.0;     // 10K ohm (bright)
-    static constexpr double kRmax = 1000000.0;   // 1M ohm (dark)
+    static constexpr double kRmin = 5000.0;       // 5K ohm (bright) — matches R.G. Keen measurements
+    static constexpr double kRmax = 250000.0;    // 250K ohm (dark) — practical lamp-driven range
 
     /** Pre-computed natural logs for log-space LDR interpolation. */
-    static constexpr double kLogRmin = 9.210340371976184;    // ln(10000)
-    static constexpr double kLogRmax = 13.815510557964274;   // ln(1000000)
+    static constexpr double kLogRmin = 8.517193191416238;    // ln(5000)
+    static constexpr double kLogRmax = 12.429216196844383;   // ln(250000)
 
     /**
      * Midpoint resistance when intensity = 0 (no modulation).
-     * Geometric mean of Rmin and Rmax: sqrt(10K * 1M) = 100K ohm.
+     * Geometric mean of Rmin and Rmax: sqrt(5K * 250K) = 35.4K ohm.
      */
-    static constexpr double kMidpointResistance = 100000.0;
+    static constexpr double kMidpointResistance = 35355.0;
 
     /**
      * CdS power-law exponent (gamma).
@@ -280,7 +280,7 @@ private:
      * characteristic "frequency-dependent tremolo" that distinguishes
      * it from a clean phaser.
      */
-    static constexpr double kGainVariation = 0.04;  // ~1.5 dB variation
+    static constexpr double kGainVariation = 0.10;  // ~1 dB/stage, matching real Darlington non-ideal gain
 
     /**
      * Vibrato output attenuation: 47K/220K voltage divider in original circuit.
@@ -384,7 +384,11 @@ private:
         double process(double input, double fc, double piOverSr,
                         double brightness) {
             // Bilinear-transformed allpass coefficient
-            const double w = fast_math::tan_approx(fc * piOverSr);
+            // Note: std::tan used instead of fast_math::tan_approx because
+            // Stage 3 (470pF) sweeps to ~35kHz where the Pade approximant
+            // argument exceeds pi/4 and returns incorrect values (wrong sign).
+            // Only called 4x per sample — negligible CPU cost.
+            const double w = std::tan(fc * piOverSr);
             const double a = (1.0 - w) / (1.0 + w);
 
             // Standard first-order allpass
