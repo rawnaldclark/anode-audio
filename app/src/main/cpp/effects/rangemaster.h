@@ -156,19 +156,23 @@ public:
         const float acGain = 10.0e3f / (kRe + rangeResistance);
 
         // Scale to drive the Ge clipper appropriately.
-        // Guitar signal ~100-300mV peak. With acGain up to 172x, the signal
-        // can reach very high amplitudes. We reduce the input scaling because
-        // the gain is now much higher than the old (incorrect) model.
-        constexpr float kInputScaling = 0.15f;
+        // After the 4831Hz HP filter, most guitar signal is attenuated
+        // heavily (fundamentals at 82-1318Hz are -12 to -35dB). The
+        // surviving treble harmonics are small (~0.01-0.05 peak).
+        // At mid-range (acGain~2), we need kInputScaling high enough
+        // that the signal is still audible. At max range (acGain~172),
+        // the clipper gets driven hard — which is correct behavior.
+        constexpr float kInputScaling = 1.0f;
         const float preClipGain = acGain * kInputScaling;
 
         // Output volume with audio taper for natural feel.
         // Audio taper: volume^2 maps [0,1] to perceptually linear loudness.
         const float outputGain = volume * volume;
 
-        // Post-clipping output scaling: the Ge clipper outputs in roughly
-        // [-1, 1] range (tanh bounded). Scale to appropriate output level.
-        constexpr float kOutputScaling = 1.8f;
+        // Post-clipping output scaling: at max range the tanh clipper
+        // outputs ~[-1, +1]. At lower range settings, output is smaller.
+        // 1.2x provides headroom at max range while keeping mid-range audible.
+        constexpr float kOutputScaling = 1.2f;
 
         // ------------------------------------------------------------------
         // Per-sample processing: treble emphasis + gain stage
