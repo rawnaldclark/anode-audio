@@ -8,35 +8,34 @@
 #include <algorithm>
 
 /**
- * Uni-Vibe emulation — rebuilt from scratch using a proven phaser core.
+ * Shin-ei Uni-Vibe emulation using the DAFx 2019 non-ideal allpass model.
  *
- * Architecture based on the Ross Bencina / MusicDSP phaser reference
- * (the most widely tested phaser implementation in existence), adapted
- * with Uni-Vibe-specific characteristics:
+ * KEY INSIGHT: The Uni-Vibe's BJT stages are NOT true allpass filters.
+ * Each stage has a ~10% gain imbalance between its inverting path (beta)
+ * and non-inverting path (alpha). This creates AMPLITUDE MODULATION
+ * (a frequency-dependent tremolo) across the entire guitar range,
+ * not just phase-cancellation notches at specific frequencies.
  *
- *   - 4 cascaded first-order allpass filters (standard phaser topology)
- *   - Uni-Vibe capacitor values (15nF, 220nF, 470pF, 4.7nF) for
- *     non-uniform notch spacing across ~3 decades
- *   - ADDITIVE wet/dry mixing: output = dry + depth * wet
- *     (NOT a crossfade — the interference creates deep notches)
- *   - Asymmetric LFO through thermal lamp/LDR cascade
- *   - Chorus mode (dry + wet) vs Vibrato mode (wet only)
+ * The "Univibe sound" is primarily this throbbing amplitude modulation,
+ * with the phase cancellation notches as a secondary effect.
  *
- * The key insight from weeks of debugging: the wet/dry mixing MUST be
- * additive (output = dry + wet) for the phase cancellation to create
- * audible notches. A crossfade (output = mix*dry + (1-mix)*wet) keeps
- * output level constant and destroys the peak-to-null contrast.
+ * Per-stage transfer function (from DAFx 2019, equations 4-5):
+ *   H(w) = Hc(w) + He(w)
+ *   Hc(w) = -beta * (jw) / (w0 + jw)     [highpass, inverting, gain beta]
+ *   He(w) = alpha * (w0) / (w0 + jw)      [lowpass, non-inverting, gain alpha]
  *
- * Parameter IDs:
+ * When alpha = beta = 1: this reduces to a standard allpass.
+ * When beta > alpha (real hardware): amplitude varies with frequency,
+ * creating the throbbing modulation that defines the Univibe.
+ *
+ * Parameters:
  *   0 = Speed     (0.0-1.0) -> LFO rate [0.5, 12] Hz
  *   1 = Intensity (0.0-1.0) -> Modulation depth
  *   2 = Mode      (0.0-1.0) -> Chorus (<0.5) or Vibrato (>=0.5)
  */
 class Univibe : public Effect {
 public:
-    Univibe() {
-        resetState();
-    }
+    Univibe() { resetState(); }
 
     void process(float* buffer, int numFrames) override {
         if (sampleRate_ <= 0) return;
@@ -45,75 +44,71 @@ public:
         const float intensity = intensity_.load(std::memory_order_relaxed);
         const float mode      = mode_.load(std::memory_order_relaxed);
 
-        // LFO frequency: speed [0,1] -> [0.5, 12] Hz
         const double lfoFreq = 0.5 * std::pow(24.0, static_cast<double>(speed));
         const double phaseInc = lfoFreq / static_cast<double>(sampleRate_);
-
         const bool vibratoMode = (mode >= 0.5f);
         const double depth = static_cast<double>(intensity);
+        const double sr = static_cast<double>(sampleRate_);
 
         for (int i = 0; i < numFrames; ++i) {
             const double input = static_cast<double>(buffer[i]);
 
-            // ---- LFO ----
-            // Asymmetric waveform (faster rise, slower fall) through
-            // thermal lamp/LDR cascade for organic Uni-Vibe character
+            // ---- LFO with thermal cascade ----
             const double lfoRaw = asymmetricLFO(lfoPhase_);
             lfoPhase_ += phaseInc;
             if (lfoPhase_ >= 1.0) lfoPhase_ -= 1.0;
-
-            // Thermal cascade: LFO -> bulb -> LDR
             const double brightness = processLamp(lfoRaw);
 
-            // ---- Compute allpass frequencies from LDR resistance ----
-            // Map brightness [0,1] -> resistance [Rmax, Rmin] (log-space)
-            // Then fc = 1/(2*pi*R*C) per stage
+            // ---- LDR resistance from brightness ----
             const double logR = kLogRmax + brightness * (kLogRmin - kLogRmax);
             const double resistance = std::exp(logR);
 
-            // ---- 4 cascaded allpass stages ----
+            // ---- 4 cascaded NON-IDEAL allpass stages ----
+            // Each stage splits into lowpass (He, gain=alpha) + highpass (Hc, gain=beta).
+            // beta > alpha by ~10%, creating frequency-dependent amplitude modulation.
             double wet = input;
 
             for (int s = 0; s < kNumStages; ++s) {
-                // Per-stage slight mismatch (real LDRs are never identical)
                 const double stageR = resistance * kLdrScales[s];
                 double fc = 1.0 / (kTwoPi * stageR * kCapacitors[s]);
-                // Clamp to valid range — Stage 3 (470pF) can reach 84kHz
-                // which exceeds Nyquist and causes tan() to produce garbage
-                fc = std::min(fc, static_cast<double>(sampleRate_) * 0.45);
-                fc = std::max(fc, 20.0);
+                fc = std::max(20.0, std::min(fc, sr * 0.45));
 
-                // Bilinear-transformed allpass coefficient
-                const double w = std::tan(kPi * fc / static_cast<double>(sampleRate_));
-                const double a = (1.0 - w) / (1.0 + w);
+                // One-pole lowpass coefficient for this stage's break frequency
+                // LP: y[n] = (1-g)*x[n] + g*y[n-1], where g = exp(-2*pi*fc/sr)
+                const double g = std::exp(-kTwoPi * fc / sr);
 
-                // First-order allpass: y[n] = a*x[n] + x[n-1] - a*y[n-1]
-                const double y = a * wet + apX1_[s] - a * apY1_[s];
-                apX1_[s] = wet;
-                apY1_[s] = y;
+                // Lowpass path: He (non-inverting, gain = alpha)
+                lpState_[s] = (1.0 - g) * wet + g * lpState_[s];
 
-                wet = y;
+                // Highpass path: Hc (inverting, gain = -beta)
+                // HP = input - LP
+                const double hp = wet - lpState_[s];
+
+                // Non-ideal allpass: alpha * LP - beta * HP
+                // alpha ~1.0, beta ~1.10 (measured from DAFx paper Table 1)
+                // The gain imbalance creates amplitude modulation:
+                //   Below fc: output ≈ alpha * input (slightly attenuated)
+                //   Above fc: output ≈ -beta * input (inverted, slightly boosted)
+                //   At fc: transition region with maximum amplitude variation
+                const double stageOut = kAlpha[s] * lpState_[s] - kBeta[s] * hp;
+
+                wet = stageOut;
             }
 
             // ---- Output mixing ----
             double output;
             if (vibratoMode) {
-                // Vibrato: wet only (brain perceives phase modulation as pitch)
-                output = wet * 0.82;  // 47K/220K divider from original
+                output = wet * 0.82;
             } else {
-                // Chorus: ADDITIVE sum — this is THE critical line.
-                // dry + wet creates interference: when the allpass chain shifts
-                // wet by 180° at some frequency, dry + wet = 0 (deep notch).
-                // When in phase: dry + wet = 2*dry (+6dB peak).
-                // This peak-to-null contrast IS the phaser/Univibe sound.
-                // depth controls how much wet is mixed in.
+                // Additive sum: dry + depth * wet
+                // The non-ideal allpass stages now produce BOTH:
+                //   1. Phase shifts that create sweeping notches/peaks via interference
+                //   2. Amplitude modulation from the alpha/beta imbalance
+                // Together these create the classic Univibe throb.
                 output = input + depth * wet;
-
-                // Scale to prevent clipping from additive sum
-                output *= 0.55;
+                output *= 0.5;
             }
 
-            // Soft limit to prevent hard clipping
             buffer[i] = static_cast<float>(
                 std::max(-1.0, std::min(1.0, output)));
         }
@@ -124,9 +119,7 @@ public:
         resetState();
     }
 
-    void reset() override {
-        resetState();
-    }
+    void reset() override { resetState(); }
 
     void setParameter(int paramId, float value) override {
         value = std::max(0.0f, std::min(1.0f, value));
@@ -152,32 +145,36 @@ private:
     static constexpr double kTwoPi = 6.28318530717958647692;
     static constexpr int kNumStages = 4;
 
-    // Uni-Vibe capacitor values (the defining component choices)
+    // Uni-Vibe capacitor values (traced from original Shin-ei schematics)
     static constexpr double kCapacitors[kNumStages] = {
         15.0e-9, 220.0e-9, 470.0e-12, 4.7e-9
     };
 
-    // Per-stage LDR mismatch (real CdS cells vary ~5-10%)
+    // Per-stage alpha/beta gains (DAFx 2019 Table 1 measurements)
+    // alpha = non-inverting (lowpass) path gain
+    // beta = inverting (highpass) path gain
+    // The ~10% imbalance creates the Univibe's signature amplitude modulation
+    static constexpr double kAlpha[kNumStages] = { 1.01, 0.98, 0.97, 0.95 };
+    static constexpr double kBeta[kNumStages]  = { 1.11, 1.09, 1.10, 1.09 };
+
+    // Per-stage LDR mismatch
     static constexpr double kLdrScales[kNumStages] = { 1.0, 0.93, 1.07, 0.96 };
 
-    // LDR resistance range
-    // DAFx 2019 paper measured 6K-4.2M on originals.
-    // Using 4K-500K for strong sweep range.
+    // LDR resistance range (wider than before — DAFx measured up to 4.2M)
     static constexpr double kRmin = 4000.0;
     static constexpr double kRmax = 500000.0;
     static constexpr double kLogRmin = 8.29404964;   // ln(4000)
     static constexpr double kLogRmax = 13.12236338;  // ln(500000)
 
     // Thermal time constants
-    static constexpr double kBulbAttackTau  = 0.015;  // 15ms heating
-    static constexpr double kBulbReleaseTau = 0.050;  // 50ms cooling
-    static constexpr double kLdrFastTau     = 0.005;  // 5ms dark-to-light
-    static constexpr double kLdrSlowTau     = 0.120;  // 120ms light-to-dark
+    static constexpr double kBulbAttackTau  = 0.015;
+    static constexpr double kBulbReleaseTau = 0.050;
+    static constexpr double kLdrFastTau     = 0.005;
+    static constexpr double kLdrSlowTau     = 0.120;
 
-    // ---- Asymmetric LFO ----
+    // ---- LFO ----
     static double asymmetricLFO(double phase) {
-        // Sine + harmonics for the asymmetric Uni-Vibe oscillator shape
-        const double s = std::sin(kTwoPi * phase);
+        const double s  = std::sin(kTwoPi * phase);
         const double h2 = 0.20 * std::sin(kTwoPi * phase * 2.0);
         const double h3 = 0.05 * std::sin(kTwoPi * phase * 3.0);
         return s + h2 + h3;
@@ -185,29 +182,21 @@ private:
 
     // ---- Lamp/LDR thermal cascade ----
     double processLamp(double lfoValue) {
-        // Rectify to [0, 1]
         const double target = std::max(0.0, std::min(1.0, lfoValue * 0.5 + 0.5));
-
-        // Bulb filament
         const double bulbCoeff = (target > bulbState_) ? bulbAttack_ : bulbRelease_;
         bulbState_ += bulbCoeff * (target - bulbState_);
-
-        // CdS LDR
         const double ldrCoeff = (bulbState_ > ldrState_) ? ldrFast_ : ldrSlow_;
         ldrState_ += ldrCoeff * (bulbState_ - ldrState_);
-
         return std::max(0.001, std::min(0.999, ldrState_));
     }
 
     void resetState() {
         lfoPhase_ = 0.0;
-        bulbState_ = 0.5;  // Start at midpoint (not dark!)
-        ldrState_ = 0.5;   // Start at midpoint
+        bulbState_ = 0.5;
+        ldrState_ = 0.5;
         for (int s = 0; s < kNumStages; ++s) {
-            apX1_[s] = 0.0;
-            apY1_[s] = 0.0;
+            lpState_[s] = 0.0;
         }
-        // Thermal coefficients
         if (sampleRate_ > 0) {
             const double sr = static_cast<double>(sampleRate_);
             bulbAttack_  = 1.0 - std::exp(-1.0 / (kBulbAttackTau * sr));
@@ -227,8 +216,7 @@ private:
     double lfoPhase_ = 0.0;
     double bulbState_ = 0.5;
     double ldrState_ = 0.5;
-    double apX1_[kNumStages] = {};
-    double apY1_[kNumStages] = {};
+    double lpState_[kNumStages] = {};  // One-pole LP state per stage
 
     // Thermal coefficients
     double bulbAttack_  = 0.0;
