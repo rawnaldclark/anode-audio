@@ -86,18 +86,20 @@ public:
         const double piOverSr = kPi / static_cast<double>(sampleRate_);
         const double maxFc = 0.45 * static_cast<double>(sampleRate_);
 
-        // Intensity-dependent chorus mix: slightly favor wet to compensate
-        // for ~1-3 dB gain loss through four BJT allpass stages.
-        // At intensity=0: 50/50. At intensity=1: 46/54 (deeper notches).
-        const double wetGain = 0.5 + 0.04 * static_cast<double>(intensity);
-        const double dryGain = 1.0 - wetGain;
+        // Chorus mix depth controlled by intensity.
+        // Real Uni-Vibe sums dry + wet through equal resistors (R35=R36=100K).
+        // This is an ADDITIVE sum, not a crossfade: output = dry + wet.
+        // When wet is 180° out of phase: dry + (-dry) = 0 (deep null).
+        // When wet is in phase: dry + dry = 2*dry (+6dB peak).
+        // Intensity scales the wet contribution for depth control.
+        const double wetMix = 0.4 + 0.6 * static_cast<double>(intensity);
 
         for (int i = 0; i < numFrames; ++i) {
-            // --- Step 1: Preamp with soft saturation ---
-            // Original Uni-Vibe has a discrete BJT preamp (Q1-Q3) with
-            // gain ~4. The BJTs soft-clip, adding warmth and odd harmonics.
-            double dry = static_cast<double>(buffer[i]) * kPreampGain;
-            dry = softSaturate(dry);
+            // --- Step 1: Input scaling ---
+            // Light preamp gain without saturation — the saturation was
+            // compressing dynamics and reducing the perceived modulation depth.
+            // The warmth/harmonics come from the allpass gain variation instead.
+            double dry = static_cast<double>(buffer[i]) * 1.5;
 
             // --- Step 2: Advance LFO ---
             const double lfoRaw = asymmetricLFO(lfoPhase_);
@@ -148,9 +150,16 @@ public:
                 // Original uses 47K/220K divider = ~82% of wet
                 output = wet * kVibratoOutputGain;
             } else {
-                // Chorus: dry + wet summed through R35/R36 (100K each)
-                // Compensated mix for deeper notch cancellation
-                output = dryGain * dry + wetGain * wet;
+                // Chorus: ADDITIVE sum of dry + wet (not a crossfade!)
+                // Real Uni-Vibe sums through equal resistors: out = dry + wet.
+                // When wet is 180° out of phase at some frequency:
+                //   dry + (-dry) = 0  → deep null (the sweeping notch)
+                // When wet is in phase:
+                //   dry + dry = 2*dry → +6dB peak
+                // This peak-to-null contrast IS the Univibe sound.
+                // wetMix scales wet for depth control (intensity knob).
+                // 0.5 scaling prevents clipping from the additive sum.
+                output = 0.5 * (dry + wetMix * wet);
             }
 
             buffer[i] = static_cast<float>(clampDouble(output, -1.0, 1.0));
@@ -280,7 +289,7 @@ private:
      * characteristic "frequency-dependent tremolo" that distinguishes
      * it from a clean phaser.
      */
-    static constexpr double kGainVariation = 0.10;  // ~1 dB/stage, matching real Darlington non-ideal gain
+    static constexpr double kGainVariation = 0.03;  // ~0.26 dB/stage — subtle warmth without destroying phase cancellation
 
     /**
      * Vibrato output attenuation: 47K/220K voltage divider in original circuit.
