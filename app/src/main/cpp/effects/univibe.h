@@ -77,10 +77,13 @@ public:
             for (int s = 0; s < kNumStages; ++s) {
                 // Per-stage slight mismatch (real LDRs are never identical)
                 const double stageR = resistance * kLdrScales[s];
-                const double fc = 1.0 / (kTwoPi * stageR * kCapacitors[s]);
+                double fc = 1.0 / (kTwoPi * stageR * kCapacitors[s]);
+                // Clamp to valid range — Stage 3 (470pF) can reach 84kHz
+                // which exceeds Nyquist and causes tan() to produce garbage
+                fc = std::min(fc, static_cast<double>(sampleRate_) * 0.45);
+                fc = std::max(fc, 20.0);
 
                 // Bilinear-transformed allpass coefficient
-                // a = (1 - tan(pi*fc/sr)) / (1 + tan(pi*fc/sr))
                 const double w = std::tan(kPi * fc / static_cast<double>(sampleRate_));
                 const double a = (1.0 - w) / (1.0 + w);
 
