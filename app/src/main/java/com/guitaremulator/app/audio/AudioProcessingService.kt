@@ -84,9 +84,11 @@ class AudioProcessingService : Service() {
         // the CPU awake but allows the screen to turn off normally.
         acquireWakeLock()
 
-        // START_STICKY: if the system kills this service for memory, restart it
-        // automatically. The user expects audio processing to persist.
-        return START_STICKY
+        // START_NOT_STICKY: do not auto-restart this service if the system kills it.
+        // The ViewModel will explicitly restart the engine when the app reopens.
+        // START_STICKY caused stale audio services to persist across APK updates,
+        // holding kernel-level Oboe stream resources that blocked the new instance.
+        return START_NOT_STICKY
     }
 
     override fun onBind(intent: Intent?): IBinder? {
@@ -98,6 +100,19 @@ class AudioProcessingService : Service() {
     override fun onDestroy() {
         releaseWakeLock()
         super.onDestroy()
+    }
+
+    /**
+     * Called when the user swipes away the app or the system kills the task
+     * (e.g., during an APK update). Without this, START_STICKY would keep
+     * the service alive with stale Oboe stream references, preventing the
+     * new app instance from acquiring audio resources after the update.
+     */
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        releaseWakeLock()
+        stopForeground(STOP_FOREGROUND_REMOVE)
+        stopSelf()
+        super.onTaskRemoved(rootIntent)
     }
 
     /**

@@ -47,6 +47,14 @@ namespace {
  *   - Effect states from Kotlin never reached C++
  */
 JNIEXPORT jint JNI_OnLoad(JavaVM* /* vm */, void* /* reserved */) {
+    // Destroy any stale engine from a previous app instance (e.g., after APK update).
+    // The old engine may hold Oboe stream pointers to closed kernel resources.
+    // Without this, gEngine persists across dlopen/dlclose cycles on some devices,
+    // and the new instance inherits dangling stream handles that block audio startup.
+    if (gEngine) {
+        gEngine->stop();
+        gEngine.reset();
+    }
     gEngine = std::make_shared<AudioEngine>();
     return JNI_VERSION_1_6;
 }

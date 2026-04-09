@@ -33,6 +33,12 @@ bool AudioEngine::start() {
         return true;
     }
 
+    // Defensive cleanup: close any stale streams from a previous instance
+    // (e.g., after crash or APK update where stop() was never called).
+    // This ensures old kernel-level audio resources are released before
+    // we attempt to open new streams in Exclusive sharing mode.
+    closeStreams();
+
     // Allow automatic restart on stream errors (cleared by stop())
     allowRestart_.store(true, std::memory_order_release);
 
