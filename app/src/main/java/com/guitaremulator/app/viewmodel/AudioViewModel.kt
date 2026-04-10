@@ -180,10 +180,15 @@ class AudioViewModel @JvmOverloads constructor(
      * Identity order [0,1,2,...,20] is the default. The UI should display
      * effects in this order for the pedal chain.
      */
-    // Default order places TubeScreamer (31) between Boost (3) and Overdrive (4)
+    // Default order:
+    //  - TubeScreamer (31) between Boost (3) and Overdrive (4)
+    //  - Univibe (20) moved after Flanger (11), BEFORE Delay/Reverb so that
+    //    with the default enabled effects (Boost + Univibe + Reverb) the
+    //    signal flows Boost → Univibe → Reverb (classic Hendrix placement:
+    //    modulation before time-based effects).
     private val _effectOrder = MutableStateFlow(
-        listOf(0, 1, 2, 3, 31, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
-               16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30)
+        listOf(0, 1, 2, 3, 31, 4, 5, 6, 7, 8, 9, 10, 11, 20, 12, 13, 14, 15,
+               16, 17, 18, 19, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30)
     )
     val effectOrder: StateFlow<List<Int>> = _effectOrder.asStateFlow()
 

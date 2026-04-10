@@ -708,10 +708,13 @@ class AudioViewModelTest {
     }
 
     @Test
-    fun `effect order defaults to expected order with TubeScreamer after Boost`() {
-        // Default order places TubeScreamer (31) between Boost (3) and Overdrive (4)
-        val expectedOrder = listOf(0, 1, 2, 3, 31, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
-            16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30)
+    fun `effect order defaults to expected order with TubeScreamer after Boost and Univibe before time-based`() {
+        // Default order:
+        //  - TubeScreamer (31) between Boost (3) and Overdrive (4)
+        //  - Univibe (20) moved after Flanger (11), before Delay/Reverb
+        //    (classic modulation-before-time-based placement)
+        val expectedOrder = listOf(0, 1, 2, 3, 31, 4, 5, 6, 7, 8, 9, 10, 11, 20, 12, 13, 14, 15,
+            16, 17, 18, 19, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30)
         assertEquals(expectedOrder, viewModel.effectOrder.value)
     }
 

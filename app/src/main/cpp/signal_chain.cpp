@@ -197,27 +197,35 @@ void SignalChain::createDefaultChain() {
     //   - Time-based effects at the end
     //   - Tuner is fed separately with clean DI input (see feedTuner())
 
-    // Index 0: Noise Gate
-    // Explicitly enabled: EffectRegistry marks enabledByDefault = true.
-    // Must be explicit since Effect base class defaults to enabled_{false}.
-    effects_.push_back(std::make_unique<NoiseGate>());
-    effects_[0]->setEnabled(true);
+    // Default fresh-install tone: EP-3 Boost → Univibe → mild Reverb.
+    // All other previously-default effects (NoiseGate, Compressor, Overdrive,
+    // EQ, Chorus, Delay) are disabled to avoid the washy "atmospheric"
+    // default that made the app sound generic on first launch.
 
-    // Index 1: Compressor
+    // Index 0: Noise Gate (disabled by default — user prefers raw tone)
+    effects_.push_back(std::make_unique<NoiseGate>());
+    effects_[0]->setEnabled(false);
+
+    // Index 1: Compressor (disabled by default)
     effects_.push_back(std::make_unique<Compressor>());
-    effects_[1]->setEnabled(true);
+    effects_[1]->setEnabled(false);
 
     // Index 2: Wah (disabled by default -- enable when needed)
     effects_.push_back(std::make_unique<Wah>());
     effects_[2]->setEnabled(false);
 
-    // Index 3: Boost (disabled by default -- enable to drive OD/amp harder)
+    // Index 3: Boost — ENABLED by default in EP-3 Echoplex preamp mode.
+    // EP-3 mode adds the signature Maestro Echoplex preamp sweetener:
+    // gentle low-cut, presence shelf boost at ~2kHz, and JFET harmonic
+    // saturation. paramId 0 = level (dB), paramId 1 = mode (0=clean, 1=EP3).
     effects_.push_back(std::make_unique<Boost>());
-    effects_[3]->setEnabled(false);
+    effects_[3]->setEnabled(true);
+    effects_[3]->setParameter(1, 1.0f);  // Mode: EP-3 Echoplex preamp
+    effects_[3]->setParameter(0, 3.0f);  // Level: +3 dB (modest, "always-on" boost)
 
-    // Index 4: Overdrive
+    // Index 4: Overdrive (disabled by default)
     effects_.push_back(std::make_unique<Overdrive>());
-    effects_[4]->setEnabled(true);
+    effects_[4]->setEnabled(false);
 
     // Index 5: Amp Model (disabled by default -- enable when an amp model is selected)
     effects_.push_back(std::make_unique<AmpModel>());
@@ -227,13 +235,13 @@ void SignalChain::createDefaultChain() {
     effects_.push_back(std::make_unique<CabinetSim>());
     effects_[6]->setEnabled(false);
 
-    // Index 7: Parametric EQ (all bands at 0dB by default = passthrough)
+    // Index 7: Parametric EQ (disabled by default — all bands flat anyway)
     effects_.push_back(std::make_unique<ParametricEQ>());
-    effects_[7]->setEnabled(true);
+    effects_[7]->setEnabled(false);
 
-    // Index 8: Chorus
+    // Index 8: Chorus (disabled by default)
     effects_.push_back(std::make_unique<Chorus>());
-    effects_[8]->setEnabled(true);
+    effects_[8]->setEnabled(false);
 
     // Index 9: Vibrato (disabled by default)
     effects_.push_back(std::make_unique<Vibrato>());
@@ -247,11 +255,13 @@ void SignalChain::createDefaultChain() {
     effects_.push_back(std::make_unique<Flanger>());
     effects_[11]->setEnabled(false);
 
-    // Index 12: Delay
+    // Index 12: Delay (disabled by default)
     effects_.push_back(std::make_unique<Delay>());
-    effects_[12]->setEnabled(true);
+    effects_[12]->setEnabled(false);
 
-    // Index 13: Reverb
+    // Index 13: Reverb — ENABLED by default, mild settings.
+    // Default params: decay=0.5 (~2s), damping=0.5, size=0.5 — these are
+    // already moderate. The 30% wet mix (set below) keeps it subtle.
     effects_.push_back(std::make_unique<Reverb>());
     effects_[13]->setEnabled(true);
 
@@ -287,9 +297,12 @@ void SignalChain::createDefaultChain() {
     effects_.push_back(std::make_unique<BossHM2>());
     effects_[19]->setEnabled(false);
 
-    // Index 20: Univibe (thermal LDR modulation emulation, disabled by default)
+    // Index 20: Univibe — ENABLED by default (classic Hendrix-style tone).
+    // Default params: speed=0.3 (~1.3Hz, slow sweep), intensity=0.7 (deep),
+    // mode=0 (chorus). The asymmetric amplitude modulation from the DAFx
+    // non-ideal allpass model produces the signature throbbing character.
     effects_.push_back(std::make_unique<Univibe>());
-    effects_[20]->setEnabled(false);
+    effects_[20]->setEnabled(true);
 
     // Index 21: Fuzz Face (WDF germanium 2-transistor fuzz, disabled by default)
     effects_.push_back(std::make_unique<FuzzFace>());
