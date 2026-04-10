@@ -134,11 +134,12 @@ object EffectRegistry {
      * default enabled state, and all available parameters with their ranges.
      */
     val effects: List<EffectInfo> = listOf(
-        // Index 0: Noise Gate
+        // Index 0: Noise Gate (disabled by default — user prefers raw tone)
         EffectInfo(
             index = 0,
             type = "NoiseGate",
             displayName = "Noise Gate",
+            enabledByDefault = false,
             params = listOf(
                 ParamInfo(0, "Threshold", -80f, 0f, -40f, "dB"),
                 ParamInfo(1, "Hysteresis", 0f, 20f, 6f, "dB"),
@@ -146,11 +147,12 @@ object EffectRegistry {
                 ParamInfo(3, "Release", 5f, 500f, 50f, "ms")
             )
         ),
-        // Index 1: Compressor
+        // Index 1: Compressor (disabled by default)
         EffectInfo(
             index = 1,
             type = "Compressor",
             displayName = "Compressor",
+            enabledByDefault = false,
             params = listOf(
                 ParamInfo(0, "Threshold", -60f, 0f, -20f, "dB"),
                 ParamInfo(1, "Ratio", 1f, 20f, 4f, ":1"),
@@ -175,22 +177,24 @@ object EffectRegistry {
                 ParamInfo(4, "Wah Type", 0f, 2f, 0f, valueLabels = mapOf(0 to "Auto", 1 to "Cry Baby", 2 to "WH-10"))
             )
         ),
-        // Index 3: Boost
+        // Index 3: Boost — ENABLED by default in EP-3 mode with modest +3dB boost.
+        // Part of the default fresh-install tone: Boost → Univibe → mild Reverb.
         EffectInfo(
             index = 3,
             type = "Boost",
             displayName = "Boost",
-            enabledByDefault = false,
+            enabledByDefault = true,
             params = listOf(
-                ParamInfo(0, "Level", 0f, 24f, 0f, "dB"),
-                ParamInfo(1, "Mode", 0f, 1f, 0f, valueLabels = mapOf(0 to "Clean", 1 to "EP-3"))
+                ParamInfo(0, "Level", 0f, 24f, 3f, "dB"),
+                ParamInfo(1, "Mode", 0f, 1f, 1f, valueLabels = mapOf(0 to "Clean", 1 to "EP-3"))
             )
         ),
-        // Index 4: Overdrive
+        // Index 4: Overdrive (disabled by default)
         EffectInfo(
             index = 4,
             type = "Overdrive",
             displayName = "Overdrive",
+            enabledByDefault = false,
             params = listOf(
                 ParamInfo(0, "Drive", 0f, 1f, 0.3f),
                 ParamInfo(1, "Tone", 0f, 1f, 0.5f),
@@ -232,11 +236,12 @@ object EffectRegistry {
                 ParamInfo(1, "Mix", 0f, 1f, 1f)
             )
         ),
-        // Index 7: Graphic EQ (10-band MXR M108S style + Level)
+        // Index 7: Graphic EQ (10-band MXR M108S style + Level) — disabled by default
         EffectInfo(
             index = 7,
             type = "ParametricEQ",
             displayName = "Graphic EQ",
+            enabledByDefault = false,
             params = listOf(
                 ParamInfo(0, "31.25 Hz", -12f, 12f, 0f, unit = "dB"),
                 ParamInfo(1, "62.5 Hz", -12f, 12f, 0f, unit = "dB"),
@@ -251,11 +256,12 @@ object EffectRegistry {
                 ParamInfo(10, "Level", -12f, 12f, 0f, unit = "dB")
             )
         ),
-        // Index 8: Chorus
+        // Index 8: Chorus (disabled by default)
         EffectInfo(
             index = 8,
             type = "Chorus",
             displayName = "Chorus",
+            enabledByDefault = false,
             params = listOf(
                 ParamInfo(0, "Rate", 0.1f, 10f, 1f, "Hz"),
                 ParamInfo(1, "Depth", 0f, 1f, 0.5f),
@@ -299,11 +305,12 @@ object EffectRegistry {
                 ParamInfo(2, "Feedback", -0.9f, 0.9f, 0.5f)
             )
         ),
-        // Index 12: Delay
+        // Index 12: Delay (disabled by default)
         EffectInfo(
             index = 12,
             type = "Delay",
             displayName = "Delay",
+            enabledByDefault = false,
             params = listOf(
                 ParamInfo(0, "Delay Time", 1f, 2000f, 300f, "ms"),
                 ParamInfo(1, "Feedback", 0f, 0.95f, 0.4f)
@@ -414,12 +421,13 @@ object EffectRegistry {
                 ParamInfo(3, "Level", 0f, 1f, 0.5f)
             )
         ),
-        // Index 20: Univibe (thermal LDR modulation emulation)
+        // Index 20: Univibe (DAFx non-ideal allpass + thermal LDR cascade)
+        // ENABLED by default as part of the fresh-install tone: Boost → Univibe → Reverb.
         EffectInfo(
             index = 20,
             type = "Univibe",
             displayName = "Uni-Vibe",
-            enabledByDefault = false,
+            enabledByDefault = true,
             params = listOf(
                 ParamInfo(0, "Speed", 0f, 1f, 0.3f),
                 ParamInfo(1, "Intensity", 0f, 1f, 0.7f),
