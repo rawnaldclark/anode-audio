@@ -595,7 +595,7 @@ class AudioViewModelTest {
         assertTrue(currentId.isNotEmpty())
 
         // Arrange deletion to succeed
-        `when`(mockPresetManager.deletePreset(currentId)).thenReturn(true)
+        `when`(mockPresetManager.deletePreset(currentId, false)).thenReturn(true)
 
         // Act
         viewModel.deletePreset(currentId)

@@ -147,28 +147,39 @@ class PresetManager(private val context: Context) {
     /**
      * Delete a preset by its unique ID.
      *
-     * Factory presets are protected and cannot be deleted.
+     * By default, factory presets are protected and cannot be deleted. Pass
+     * [allowFactory] = true to override this protection (used by the context
+     * menu's "delete factory preset" flow, which warns the user that the
+     * preset may be restored on the next app update or reinstall).
+     *
+     * Note: Since factory presets are re-seeded from code on every app
+     * launch via FactoryPresets, deleting one only hides it until the next
+     * launch. To persist factory-preset deletions, a separate "deleted IDs"
+     * list would need to be introduced (not implemented here).
      *
      * @param id UUID string of the preset to delete.
+     * @param allowFactory If true, bypass the factory-preset protection check.
      * @return True if deleted successfully, false if not found or protected.
      */
-    fun deletePreset(id: String): Boolean {
+    fun deletePreset(id: String, allowFactory: Boolean = false): Boolean {
         val file = File(presetsDir, id + JSON_EXTENSION)
         if (!file.exists()) return false
 
         // Check if it is a factory preset before deleting
-        try {
-            val json = JSONObject(file.readText())
-            if (json.optBoolean("isFactory", false)) {
-                Log.w(TAG, "Cannot delete factory preset: $id")
-                return false
+        if (!allowFactory) {
+            try {
+                val json = JSONObject(file.readText())
+                if (json.optBoolean("isFactory", false)) {
+                    Log.w(TAG, "Cannot delete factory preset: $id")
+                    return false
+                }
+            } catch (e: Exception) {
+                // If we cannot parse it, allow deletion
             }
-        } catch (e: Exception) {
-            // If we cannot parse it, allow deletion
         }
 
         return file.delete().also { success ->
-            if (success) Log.d(TAG, "Deleted preset: $id")
+            if (success) Log.d(TAG, "Deleted preset: $id (allowFactory=$allowFactory)")
             else Log.w(TAG, "Failed to delete preset file: $id")
         }
     }

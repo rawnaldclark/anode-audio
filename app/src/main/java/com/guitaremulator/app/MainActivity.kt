@@ -179,6 +179,10 @@ class MainActivity : ComponentActivity() {
                 var showSettings by remember { mutableStateOf(false) }
                 var showDrums by remember { mutableStateOf(false) }
                 var tunerOverlayActive by remember { mutableStateOf(false) }
+                // When non-null, the next SAF export result is routed to
+                // exportPresetById(this) instead of exportCurrentPreset.
+                var exportTargetPresetId by remember { mutableStateOf<String?>(null) }
+                var exportTargetFileName by remember { mutableStateOf("preset.json") }
 
                 // Pause JNI polling on Settings screen: it doesn't show level
                 // meters, spectrum, or tuner, so the 30fps JNI calls are wasted
@@ -209,13 +213,24 @@ class MainActivity : ComponentActivity() {
                     }
                 }
 
-                // SAF launcher for exporting preset as JSON
+                // SAF launcher for exporting preset as JSON. If a specific
+                // target preset ID has been set (via the long-press context
+                // menu Export action), export that preset by ID; otherwise
+                // fall back to exporting the currently loaded preset.
                 val presetExportLauncher = rememberLauncherForActivityResult(
                     ActivityResultContracts.CreateDocument("application/json")
                 ) { uri: Uri? ->
+                    val targetId = exportTargetPresetId
                     if (uri != null) {
-                        audioViewModel.exportCurrentPreset(uri)
+                        if (targetId != null) {
+                            audioViewModel.exportPresetById(targetId, uri)
+                        } else {
+                            audioViewModel.exportCurrentPreset(uri)
+                        }
                     }
+                    // Clear the target regardless of result so a cancelled
+                    // export does not stick around for the next invocation.
+                    exportTargetPresetId = null
                 }
 
                 // SAF launcher for importing a preset JSON file
@@ -334,6 +349,12 @@ class MainActivity : ComponentActivity() {
                             onDeletePreset = { presetId ->
                                 audioViewModel.deletePreset(presetId)
                             },
+                            onDeleteFactoryPreset = { presetId ->
+                                // The browser overlay has already shown a
+                                // factory-specific confirmation dialog, so
+                                // bypass the regular protection here.
+                                audioViewModel.deletePreset(presetId, allowFactory = true)
+                            },
                             onDuplicatePreset = { presetId ->
                                 audioViewModel.duplicatePreset(presetId)
                             },
@@ -380,7 +401,17 @@ class MainActivity : ComponentActivity() {
                                 }
                             },
                             onExportPreset = {
+                                exportTargetPresetId = null
                                 presetExportLauncher.launch(audioViewModel.getExportFileName())
+                            },
+                            onExportPresetById = { presetId ->
+                                // Stash the target ID so the SAF callback
+                                // can route to exportPresetById, and use the
+                                // target preset's name as the default filename.
+                                val targetName = presets.find { it.id == presetId }?.name ?: "preset"
+                                exportTargetPresetId = presetId
+                                exportTargetFileName = audioViewModel.getExportFileNameFor(targetName)
+                                presetExportLauncher.launch(exportTargetFileName)
                             },
                             onImportPreset = {
                                 presetImportLauncher.launch(arrayOf("application/json"))

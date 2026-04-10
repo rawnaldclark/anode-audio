@@ -243,9 +243,9 @@ class PresetDelegate(
      *
      * @param presetId UUID of the preset to delete.
      */
-    fun deletePreset(presetId: String) {
+    fun deletePreset(presetId: String, allowFactory: Boolean = false) {
         coroutineScope.launch {
-            val deleted = presetManager.deletePreset(presetId)
+            val deleted = presetManager.deletePreset(presetId, allowFactory)
             if (deleted && _currentPresetId.value == presetId) {
                 _currentPresetName.value = ""
                 _currentPresetId.value = ""
@@ -297,6 +297,48 @@ class PresetDelegate(
                 _presetIOStatus.value = "Export failed: ${e.message}"
             }
         }
+    }
+
+    /**
+     * Export an arbitrary preset (by ID) to a SAF URI as JSON.
+     *
+     * Unlike [exportCurrentPreset], this does not require the target preset
+     * to be the currently loaded one — used by the preset browser's long-press
+     * context menu Export action.
+     *
+     * @param presetId UUID of the preset to export.
+     * @param uri Content URI from SAF CreateDocument.
+     */
+    fun exportPresetById(presetId: String, uri: Uri) {
+        coroutineScope.launch {
+            if (presetId.isEmpty()) {
+                _presetIOStatus.value = "No preset selected to export"
+                return@launch
+            }
+            try {
+                withContext(Dispatchers.IO) {
+                    val preset = presetManager.loadPreset(presetId)
+                        ?: throw IllegalStateException("Preset not found")
+                    val json = presetManager.serializePreset(preset)
+                    val output = getApplication().contentResolver
+                        .openOutputStream(uri)
+                        ?: throw IllegalStateException("Cannot open output file")
+                    output.use { it.write(json.toByteArray(Charsets.UTF_8)) }
+                }
+                _presetIOStatus.value = "Preset exported successfully"
+            } catch (e: Exception) {
+                android.util.Log.e("PresetDelegate", "Failed to export preset by id", e)
+                _presetIOStatus.value = "Export failed: ${e.message}"
+            }
+        }
+    }
+
+    /**
+     * Build a sanitized export file name for a specific preset.
+     */
+    fun getExportFileNameFor(presetName: String): String {
+        val name = presetName.ifEmpty { "preset" }
+        return name.replace(Regex("[^a-zA-Z0-9 _-]"), "").trim() + ".json"
     }
 
     /**

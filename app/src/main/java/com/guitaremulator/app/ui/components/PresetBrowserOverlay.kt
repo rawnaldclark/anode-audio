@@ -22,14 +22,22 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Favorite
+import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.outlined.Star
 import androidx.compose.material3.AlertDialog
@@ -93,9 +101,16 @@ import com.guitaremulator.app.ui.theme.DesignSystem
  * @param onOverwritePreset Callback to overwrite an existing user preset by ID.
  * @param onRenamePreset Callback with (presetId, newName) to rename a preset.
  * @param onDeletePreset Callback with preset ID to delete a user preset.
+ *     The caller is expected to surface any additional "are you sure?" UI.
+ * @param onDeleteFactoryPreset Callback with preset ID to force-delete a
+ *     factory preset (bypasses the factory-protection check). The overlay
+ *     surfaces its own factory-preset confirmation dialog before calling
+ *     this, so the caller should NOT present another confirmation.
  * @param onDuplicatePreset Callback with preset ID to duplicate any preset
  *     (factory or user) as a new user preset with a "(Copy)" name suffix.
  * @param onExportPreset Callback to export the current preset.
+ * @param onExportPresetById Callback with preset ID to export an arbitrary
+ *     preset (used by the long-press context menu Export action).
  * @param onImportPreset Callback to import a preset file.
  * @param onToggleFavorite Callback with preset ID to toggle favorite status.
  * @param onDismiss Callback to close the overlay.
@@ -111,8 +126,10 @@ fun PresetBrowserOverlay(
     onOverwritePreset: (String) -> Unit,
     onRenamePreset: (String, String) -> Unit,
     onDeletePreset: (String) -> Unit,
+    onDeleteFactoryPreset: (String) -> Unit,
     onDuplicatePreset: (String) -> Unit,
     onExportPreset: () -> Unit,
+    onExportPresetById: (String) -> Unit,
     onImportPreset: () -> Unit,
     onToggleFavorite: (String) -> Unit,
     onDismiss: () -> Unit,
@@ -134,8 +151,10 @@ fun PresetBrowserOverlay(
             onOverwritePreset = onOverwritePreset,
             onRenamePreset = onRenamePreset,
             onDeletePreset = onDeletePreset,
+            onDeleteFactoryPreset = onDeleteFactoryPreset,
             onDuplicatePreset = onDuplicatePreset,
             onExportPreset = onExportPreset,
+            onExportPresetById = onExportPresetById,
             onImportPreset = onImportPreset,
             onToggleFavorite = onToggleFavorite,
             onDismiss = onDismiss,
@@ -163,8 +182,10 @@ private fun PresetBrowserContent(
     onOverwritePreset: (String) -> Unit,
     onRenamePreset: (String, String) -> Unit,
     onDeletePreset: (String) -> Unit,
+    onDeleteFactoryPreset: (String) -> Unit,
     onDuplicatePreset: (String) -> Unit,
     onExportPreset: () -> Unit,
+    onExportPresetById: (String) -> Unit,
     onImportPreset: () -> Unit,
     onToggleFavorite: (String) -> Unit,
     onDismiss: () -> Unit,
@@ -182,6 +203,10 @@ private fun PresetBrowserContent(
     // Rename dialog state
     var renamePresetId by remember { mutableStateOf<String?>(null) }
     var renameText by remember { mutableStateOf("") }
+    // Factory-preset delete confirmation dialog state: holds the ID of the
+    // factory preset the user has chosen to delete, null if no dialog shown.
+    var factoryDeleteConfirmId by remember { mutableStateOf<String?>(null) }
+    var factoryDeleteConfirmName by remember { mutableStateOf("") }
 
     // -- Filter presets --
     val filtered = remember(presets, searchQuery, selectedCategory, showFavoritesOnly) {
@@ -283,13 +308,16 @@ private fun PresetBrowserContent(
     }
 
     // -- Context menu dialog (long-press on any preset) --
-    // Factory presets get Duplicate only; user presets get Rename + Duplicate + Delete.
+    // All presets get Favorite/Duplicate/Export/Delete; user presets
+    // additionally get Rename. Factory presets trigger a confirmation dialog
+    // before deletion because they will be re-seeded from code on next launch.
     if (contextMenuPresetId != null) {
         val targetPreset = presets.find { it.id == contextMenuPresetId }
         if (targetPreset != null) {
             ContextMenuDialog(
                 presetName = targetPreset.name,
                 isFactory = targetPreset.isFactory,
+                isFavorite = targetPreset.isFavorite,
                 onRename = {
                     renameText = targetPreset.name
                     renamePresetId = contextMenuPresetId
@@ -300,7 +328,22 @@ private fun PresetBrowserContent(
                     contextMenuPresetId = null
                 },
                 onDelete = {
-                    onDeletePreset(contextMenuPresetId!!)
+                    val id = contextMenuPresetId!!
+                    if (targetPreset.isFactory) {
+                        // Defer the destructive action behind a confirmation
+                        factoryDeleteConfirmId = id
+                        factoryDeleteConfirmName = targetPreset.name
+                    } else {
+                        onDeletePreset(id)
+                    }
+                    contextMenuPresetId = null
+                },
+                onExport = {
+                    onExportPresetById(contextMenuPresetId!!)
+                    contextMenuPresetId = null
+                },
+                onToggleFavorite = {
+                    onToggleFavorite(contextMenuPresetId!!)
                     contextMenuPresetId = null
                 },
                 onDismiss = { contextMenuPresetId = null }
@@ -309,6 +352,53 @@ private fun PresetBrowserContent(
             // Preset not found (e.g., deleted while menu was open) -- clear state
             contextMenuPresetId = null
         }
+    }
+
+    // -- Factory-preset delete confirmation dialog --
+    if (factoryDeleteConfirmId != null) {
+        AlertDialog(
+            onDismissRequest = {
+                factoryDeleteConfirmId = null
+                factoryDeleteConfirmName = ""
+            },
+            containerColor = DesignSystem.ModuleSurface,
+            title = {
+                Text(
+                    text = "Delete Factory Preset?",
+                    color = DesignSystem.TextPrimary,
+                    fontWeight = FontWeight.Bold
+                )
+            },
+            text = {
+                Text(
+                    text = "\"$factoryDeleteConfirmName\" is a factory preset. " +
+                        "It will be hidden from your list, but may reappear the next " +
+                        "time you update or reinstall the app. Continue?",
+                    color = DesignSystem.TextSecondary,
+                    fontSize = 14.sp
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        val id = factoryDeleteConfirmId
+                        factoryDeleteConfirmId = null
+                        factoryDeleteConfirmName = ""
+                        if (id != null) onDeleteFactoryPreset(id)
+                    }
+                ) {
+                    Text("Delete", color = DesignSystem.ClipRed, fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = {
+                    factoryDeleteConfirmId = null
+                    factoryDeleteConfirmName = ""
+                }) {
+                    Text("Cancel", color = DesignSystem.TextSecondary)
+                }
+            }
+        )
     }
 
     // -- Rename dialog --
@@ -875,25 +965,35 @@ private fun BottomActionBar(
 /**
  * Alert dialog shown on long-press of a preset card.
  *
- * Action availability depends on [isFactory]:
- * - User presets: Rename, Duplicate, Delete
- * - Factory presets: Duplicate only (they are read-only — renaming or
- *   deleting them would remove the immutable factory bank)
+ * Available actions depend on [isFactory]:
+ * - User presets: Favorite toggle, Rename, Duplicate, Export, Delete
+ * - Factory presets: Favorite toggle, Duplicate, Export, Delete (Rename
+ *   omitted because factory presets are re-seeded from code on app launch)
+ *
+ * Deleting a factory preset is allowed but the caller should route that
+ * action through a confirmation dialog warning the user that the preset
+ * may reappear on the next app update or reinstall.
  *
  * @param presetName Display name of the target preset.
- * @param isFactory Whether the target preset is a read-only factory preset.
- * @param onRename Callback to initiate the rename flow (ignored for factory).
+ * @param isFactory Whether the target preset is a factory-seeded preset.
+ * @param isFavorite Current favorite state, controls label/icon for the toggle.
+ * @param onRename Callback to initiate the rename flow (hidden for factory).
  * @param onDuplicate Callback to duplicate the preset (both factory and user).
- * @param onDelete Callback to delete the preset (ignored for factory).
+ * @param onDelete Callback to delete the preset (both factory and user).
+ * @param onExport Callback to export the preset to a SAF URI.
+ * @param onToggleFavorite Callback to flip the preset's favorite flag.
  * @param onDismiss Callback to close the dialog without action.
  */
 @Composable
 private fun ContextMenuDialog(
     presetName: String,
     isFactory: Boolean,
+    isFavorite: Boolean,
     onRename: () -> Unit,
     onDuplicate: () -> Unit,
     onDelete: () -> Unit,
+    onExport: () -> Unit,
+    onToggleFavorite: () -> Unit,
     onDismiss: () -> Unit
 ) {
     AlertDialog(
@@ -911,43 +1011,43 @@ private fun ContextMenuDialog(
         },
         text = {
             Column {
-                // Rename is user-preset only
+                // Favorite toggle (available for all presets)
+                ContextMenuItem(
+                    icon = if (isFavorite) Icons.Filled.Favorite else Icons.Filled.FavoriteBorder,
+                    label = if (isFavorite) "Remove from Favorites" else "Add to Favorites",
+                    color = if (isFavorite) DesignSystem.GoldPiping else DesignSystem.TextPrimary,
+                    onClick = onToggleFavorite
+                )
+                // Rename is user-preset only (factory names are re-seeded from code)
                 if (!isFactory) {
-                    TextButton(
-                        onClick = onRename,
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Text(
-                            text = "Rename",
-                            fontSize = 15.sp,
-                            color = DesignSystem.TextPrimary
-                        )
-                    }
-                }
-                // Duplicate is always available
-                TextButton(
-                    onClick = onDuplicate,
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text(
-                        text = "Duplicate",
-                        fontSize = 15.sp,
-                        color = DesignSystem.TextPrimary
+                    ContextMenuItem(
+                        icon = Icons.Filled.Edit,
+                        label = "Rename",
+                        color = DesignSystem.TextPrimary,
+                        onClick = onRename
                     )
                 }
-                // Delete is user-preset only
-                if (!isFactory) {
-                    TextButton(
-                        onClick = onDelete,
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Text(
-                            text = "Delete",
-                            fontSize = 15.sp,
-                            color = DesignSystem.ClipRed
-                        )
-                    }
-                }
+                // Duplicate is always available
+                ContextMenuItem(
+                    icon = Icons.Filled.Add,
+                    label = "Duplicate",
+                    color = DesignSystem.TextPrimary,
+                    onClick = onDuplicate
+                )
+                // Export to SAF (both factory and user)
+                ContextMenuItem(
+                    icon = Icons.Filled.Share,
+                    label = "Export",
+                    color = DesignSystem.TextPrimary,
+                    onClick = onExport
+                )
+                // Delete (both factory and user; factory flow adds a confirmation)
+                ContextMenuItem(
+                    icon = Icons.Filled.Delete,
+                    label = if (isFactory) "Delete (Factory)" else "Delete",
+                    color = DesignSystem.ClipRed,
+                    onClick = onDelete
+                )
             }
         },
         confirmButton = {},
@@ -957,6 +1057,42 @@ private fun ContextMenuDialog(
             }
         }
     )
+}
+
+/**
+ * A single row inside the context menu dialog: leading icon + text label,
+ * rendered as a full-width [TextButton]. Extracted to keep the dialog body
+ * free of repetition and to ensure consistent spacing/typography.
+ */
+@Composable
+private fun ContextMenuItem(
+    icon: ImageVector,
+    label: String,
+    color: Color,
+    onClick: () -> Unit
+) {
+    TextButton(
+        onClick = onClick,
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                imageVector = icon,
+                contentDescription = null,
+                tint = color,
+                modifier = Modifier.size(20.dp)
+            )
+            Spacer(modifier = Modifier.width(12.dp))
+            Text(
+                text = label,
+                fontSize = 15.sp,
+                color = color
+            )
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

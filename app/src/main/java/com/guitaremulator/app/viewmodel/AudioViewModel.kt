@@ -302,10 +302,15 @@ class AudioViewModel @JvmOverloads constructor(
         presetDelegate.saveCurrentAsPreset(name, category)
     fun renamePreset(presetId: String, newName: String) = presetDelegate.renamePreset(presetId, newName)
     fun overwritePreset(presetId: String) = presetDelegate.overwritePreset(presetId)
-    fun deletePreset(presetId: String) = presetDelegate.deletePreset(presetId)
+    fun deletePreset(presetId: String, allowFactory: Boolean = false) =
+        presetDelegate.deletePreset(presetId, allowFactory)
     fun duplicatePreset(presetId: String) = presetDelegate.duplicatePreset(presetId)
     fun refreshPresetList() = presetDelegate.refreshPresetList()
     fun exportCurrentPreset(uri: Uri) = presetDelegate.exportCurrentPreset(uri)
+    fun exportPresetById(presetId: String, uri: Uri) =
+        presetDelegate.exportPresetById(presetId, uri)
+    fun getExportFileNameFor(presetName: String): String =
+        presetDelegate.getExportFileNameFor(presetName)
     fun importPreset(uri: Uri) = presetDelegate.importPreset(uri)
     fun getExportFileName(): String = presetDelegate.getExportFileName()
     fun clearPresetIOStatus() = presetDelegate.clearPresetIOStatus()
