@@ -213,6 +213,32 @@ class PresetDelegate(
     }
 
     /**
+     * Duplicate a preset (factory or user) as a new user preset.
+     *
+     * The copy receives a fresh UUID, a "(Copy)" suffix on the name, and is
+     * marked as non-factory so it can be freely edited/renamed/deleted. The
+     * preset list is refreshed after the save, but the newly created preset
+     * is NOT auto-loaded — the user stays on whatever preset they had active.
+     *
+     * @param presetId UUID of the source preset to duplicate.
+     */
+    fun duplicatePreset(presetId: String) {
+        coroutineScope.launch {
+            val source = presetManager.loadPreset(presetId) ?: return@launch
+            val copy = source.copy(
+                id = java.util.UUID.randomUUID().toString(),
+                name = "${source.name} (Copy)".take(100),
+                author = "User",
+                isFactory = false,
+                createdAt = System.currentTimeMillis()
+            )
+            if (presetManager.savePreset(copy)) {
+                refreshPresetList()
+            }
+        }
+    }
+
+    /**
      * Delete a preset by its ID and refresh the preset list.
      *
      * @param presetId UUID of the preset to delete.

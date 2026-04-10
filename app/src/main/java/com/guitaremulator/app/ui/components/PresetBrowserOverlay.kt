@@ -93,6 +93,8 @@ import com.guitaremulator.app.ui.theme.DesignSystem
  * @param onOverwritePreset Callback to overwrite an existing user preset by ID.
  * @param onRenamePreset Callback with (presetId, newName) to rename a preset.
  * @param onDeletePreset Callback with preset ID to delete a user preset.
+ * @param onDuplicatePreset Callback with preset ID to duplicate any preset
+ *     (factory or user) as a new user preset with a "(Copy)" name suffix.
  * @param onExportPreset Callback to export the current preset.
  * @param onImportPreset Callback to import a preset file.
  * @param onToggleFavorite Callback with preset ID to toggle favorite status.
@@ -109,6 +111,7 @@ fun PresetBrowserOverlay(
     onOverwritePreset: (String) -> Unit,
     onRenamePreset: (String, String) -> Unit,
     onDeletePreset: (String) -> Unit,
+    onDuplicatePreset: (String) -> Unit,
     onExportPreset: () -> Unit,
     onImportPreset: () -> Unit,
     onToggleFavorite: (String) -> Unit,
@@ -131,6 +134,7 @@ fun PresetBrowserOverlay(
             onOverwritePreset = onOverwritePreset,
             onRenamePreset = onRenamePreset,
             onDeletePreset = onDeletePreset,
+            onDuplicatePreset = onDuplicatePreset,
             onExportPreset = onExportPreset,
             onImportPreset = onImportPreset,
             onToggleFavorite = onToggleFavorite,
@@ -159,6 +163,7 @@ private fun PresetBrowserContent(
     onOverwritePreset: (String) -> Unit,
     onRenamePreset: (String, String) -> Unit,
     onDeletePreset: (String) -> Unit,
+    onDuplicatePreset: (String) -> Unit,
     onExportPreset: () -> Unit,
     onImportPreset: () -> Unit,
     onToggleFavorite: (String) -> Unit,
@@ -170,7 +175,9 @@ private fun PresetBrowserContent(
     var selectedCategory by remember { mutableStateOf<PresetCategory?>(null) }
     var showFavoritesOnly by remember { mutableStateOf(false) }
 
-    // Context menu state: which user preset (by ID) has the long-press menu open
+    // Context menu state: which preset (by ID) has the long-press menu open.
+    // Both factory and user presets can open this menu; the dialog adapts
+    // its offered actions based on preset.isFactory.
     var contextMenuPresetId by remember { mutableStateOf<String?>(null) }
     // Rename dialog state
     var renamePresetId by remember { mutableStateOf<String?>(null) }
@@ -259,7 +266,7 @@ private fun PresetBrowserContent(
                     onDismiss()
                 },
                 onToggleFavorite = onToggleFavorite,
-                onLongPressUserPreset = { id -> contextMenuPresetId = id },
+                onLongPressPreset = { id -> contextMenuPresetId = id },
                 modifier = Modifier.weight(1f)
             )
 
@@ -275,15 +282,21 @@ private fun PresetBrowserContent(
         }
     }
 
-    // -- Context menu dialog (long-press on user preset) --
+    // -- Context menu dialog (long-press on any preset) --
+    // Factory presets get Duplicate only; user presets get Rename + Duplicate + Delete.
     if (contextMenuPresetId != null) {
         val targetPreset = presets.find { it.id == contextMenuPresetId }
-        if (targetPreset != null && !targetPreset.isFactory) {
+        if (targetPreset != null) {
             ContextMenuDialog(
                 presetName = targetPreset.name,
+                isFactory = targetPreset.isFactory,
                 onRename = {
                     renameText = targetPreset.name
                     renamePresetId = contextMenuPresetId
+                    contextMenuPresetId = null
+                },
+                onDuplicate = {
+                    onDuplicatePreset(contextMenuPresetId!!)
                     contextMenuPresetId = null
                 },
                 onDelete = {
@@ -293,7 +306,7 @@ private fun PresetBrowserContent(
                 onDismiss = { contextMenuPresetId = null }
             )
         } else {
-            // Preset not found or is factory -- clear the state
+            // Preset not found (e.g., deleted while menu was open) -- clear state
             contextMenuPresetId = null
         }
     }
@@ -528,7 +541,7 @@ private fun filterChipColors(selected: Boolean) = FilterChipDefaults.filterChipC
  *
  * Each preset card shows a favorite star, name, category label, and a
  * green check if it is the currently active preset. Tapping selects; long-pressing
- * a user preset triggers the context menu.
+ * any preset (factory or user) triggers the context menu.
  *
  * @param factoryPresets Filtered factory presets to display.
  * @param userPresets Filtered user presets to display.
@@ -536,7 +549,7 @@ private fun filterChipColors(selected: Boolean) = FilterChipDefaults.filterChipC
  * @param isEmpty True when no presets match the current filters.
  * @param onPresetSelected Callback with preset ID on tap.
  * @param onToggleFavorite Callback with preset ID to toggle favorite.
- * @param onLongPressUserPreset Callback with preset ID on long-press (user presets only).
+ * @param onLongPressPreset Callback with preset ID on long-press (factory and user).
  * @param modifier Modifier (typically Modifier.weight(1f) to fill available space).
  */
 @Composable
@@ -547,7 +560,7 @@ private fun PresetList(
     isEmpty: Boolean,
     onPresetSelected: (String) -> Unit,
     onToggleFavorite: (String) -> Unit,
-    onLongPressUserPreset: (String) -> Unit,
+    onLongPressPreset: (String) -> Unit,
     modifier: Modifier = Modifier
 ) {
     if (isEmpty) {
@@ -584,7 +597,7 @@ private fun PresetList(
                     isActive = preset.id == currentPresetId,
                     onTap = { onPresetSelected(preset.id) },
                     onToggleFavorite = { onToggleFavorite(preset.id) },
-                    onLongPress = null // Factory presets have no context menu
+                    onLongPress = { onLongPressPreset(preset.id) }
                 )
             }
         }
@@ -613,7 +626,7 @@ private fun PresetList(
                     isActive = preset.id == currentPresetId,
                     onTap = { onPresetSelected(preset.id) },
                     onToggleFavorite = { onToggleFavorite(preset.id) },
-                    onLongPress = { onLongPressUserPreset(preset.id) }
+                    onLongPress = { onLongPressPreset(preset.id) }
                 )
             }
         }
@@ -860,18 +873,26 @@ private fun BottomActionBar(
 // ---------------------------------------------------------------------------
 
 /**
- * Alert dialog shown on long-press of a user preset card.
- * Offers Rename and Delete actions, plus Cancel to dismiss.
+ * Alert dialog shown on long-press of a preset card.
+ *
+ * Action availability depends on [isFactory]:
+ * - User presets: Rename, Duplicate, Delete
+ * - Factory presets: Duplicate only (they are read-only — renaming or
+ *   deleting them would remove the immutable factory bank)
  *
  * @param presetName Display name of the target preset.
- * @param onRename Callback to initiate the rename flow.
- * @param onDelete Callback to delete the preset.
+ * @param isFactory Whether the target preset is a read-only factory preset.
+ * @param onRename Callback to initiate the rename flow (ignored for factory).
+ * @param onDuplicate Callback to duplicate the preset (both factory and user).
+ * @param onDelete Callback to delete the preset (ignored for factory).
  * @param onDismiss Callback to close the dialog without action.
  */
 @Composable
 private fun ContextMenuDialog(
     presetName: String,
+    isFactory: Boolean,
     onRename: () -> Unit,
+    onDuplicate: () -> Unit,
     onDelete: () -> Unit,
     onDismiss: () -> Unit
 ) {
@@ -890,25 +911,42 @@ private fun ContextMenuDialog(
         },
         text = {
             Column {
+                // Rename is user-preset only
+                if (!isFactory) {
+                    TextButton(
+                        onClick = onRename,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(
+                            text = "Rename",
+                            fontSize = 15.sp,
+                            color = DesignSystem.TextPrimary
+                        )
+                    }
+                }
+                // Duplicate is always available
                 TextButton(
-                    onClick = onRename,
+                    onClick = onDuplicate,
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Text(
-                        text = "Rename",
+                        text = "Duplicate",
                         fontSize = 15.sp,
                         color = DesignSystem.TextPrimary
                     )
                 }
-                TextButton(
-                    onClick = onDelete,
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text(
-                        text = "Delete",
-                        fontSize = 15.sp,
-                        color = DesignSystem.ClipRed
-                    )
+                // Delete is user-preset only
+                if (!isFactory) {
+                    TextButton(
+                        onClick = onDelete,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(
+                            text = "Delete",
+                            fontSize = 15.sp,
+                            color = DesignSystem.ClipRed
+                        )
+                    }
                 }
             }
         },

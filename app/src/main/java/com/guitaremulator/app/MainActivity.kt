@@ -334,6 +334,9 @@ class MainActivity : ComponentActivity() {
                             onDeletePreset = { presetId ->
                                 audioViewModel.deletePreset(presetId)
                             },
+                            onDuplicatePreset = { presetId ->
+                                audioViewModel.duplicatePreset(presetId)
+                            },
                             onStartClick = {
                                 if (hasRecordAudioPermission()) {
                                     audioViewModel.startEngine()
