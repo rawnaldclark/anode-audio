@@ -119,7 +119,7 @@ internal object FactoryPresets {
      */
     private fun createCleanSparkle(): Preset {
         val enabled = mapOf(
-            0 to true,   // NoiseGate
+            0 to false,    // NoiseGate
             1 to true,   // Compressor
             2 to false,  // Wah
             3 to false,  // Boost
@@ -191,7 +191,7 @@ internal object FactoryPresets {
      */
     private fun createClassicCrunch(): Preset {
         val enabled = mapOf(
-            0 to true,   // NoiseGate
+            0 to false,    // NoiseGate
             1 to true,   // Compressor
             2 to false,  // Wah
             3 to false,  // Boost
@@ -268,7 +268,7 @@ internal object FactoryPresets {
      */
     private fun createHeavyMetal(): Preset {
         val enabled = mapOf(
-            0 to true,   // NoiseGate (essential for high gain)
+            0 to false,    // NoiseGate (essential for high gain)
             1 to true,   // Compressor
             2 to false,  // Wah
             3 to false,  // Boost
@@ -496,7 +496,7 @@ internal object FactoryPresets {
      */
     private fun createDS1Crunch(): Preset {
         val enabled = mapOf(
-            0 to true,   // NoiseGate
+            0 to false,    // NoiseGate
             1 to false,  // Compressor
             2 to false,  // Wah
             3 to false,  // Boost
@@ -560,7 +560,7 @@ internal object FactoryPresets {
      */
     private fun createRATMetal(): Preset {
         val enabled = mapOf(
-            0 to true,   // NoiseGate (tight)
+            0 to false,    // NoiseGate (tight)
             1 to true,   // Compressor
             2 to false,  // Wah
             3 to false,  // Boost
@@ -707,7 +707,7 @@ internal object FactoryPresets {
      */
     private fun createClaptonWomanTone(): Preset {
         val enabled = mapOf(
-            0 to true,   // NoiseGate
+            0 to false,    // NoiseGate
             1 to false,  // Compressor
             2 to false,  // Wah
             3 to false,  // Boost
@@ -778,7 +778,7 @@ internal object FactoryPresets {
      */
     private fun createJackWhite7NA(): Preset {
         val enabled = mapOf(
-            0 to true,   // NoiseGate
+            0 to false,    // NoiseGate
             1 to false,  // Compressor
             2 to false,  // Wah
             3 to true,   // Boost
@@ -988,7 +988,7 @@ internal object FactoryPresets {
      */
     private fun createHendrixPurpleHaze(): Preset {
         val enabled = mapOf(
-            0 to true,   // NoiseGate
+            0 to false,    // NoiseGate
             1 to false,  // Compressor
             2 to false,  // Wah
             3 to false,  // Boost
@@ -1057,7 +1057,7 @@ internal object FactoryPresets {
      */
     private fun createHendrixVoodooChild(): Preset {
         val enabled = mapOf(
-            0 to true,   // NoiseGate
+            0 to false,    // NoiseGate
             1 to false,  // Compressor
             2 to true,   // Wah (auto-wah for the "talking" quality)
             3 to false,  // Boost
@@ -1131,7 +1131,7 @@ internal object FactoryPresets {
      */
     private fun createGilmourComfortablyNumb(): Preset {
         val enabled = mapOf(
-            0 to true,   // NoiseGate
+            0 to false,    // NoiseGate
             1 to true,   // Compressor
             2 to false,  // Wah
             3 to false,  // Boost
@@ -1218,7 +1218,7 @@ internal object FactoryPresets {
      */
     private fun createOctaviaFuzz(): Preset {
         val enabled = mapOf(
-            0 to true,   // NoiseGate
+            0 to false,    // NoiseGate
             1 to false,  // Compressor
             2 to false,  // Wah
             3 to false,  // Boost
@@ -1285,7 +1285,7 @@ internal object FactoryPresets {
      */
     private fun createEVHBrownSound(): Preset {
         val enabled = mapOf(
-            0 to true,   // NoiseGate
+            0 to false,    // NoiseGate
             1 to false,  // Compressor
             2 to false,  // Wah
             3 to true,   // Boost (EP-3)
@@ -1358,7 +1358,7 @@ internal object FactoryPresets {
      */
     private fun createFruscianteDaniCalifornia(): Preset {
         val enabled = mapOf(
-            0 to true,   // NoiseGate
+            0 to false,    // NoiseGate
             1 to false,  // Compressor
             2 to false,  // Wah
             3 to false,  // Boost
@@ -1434,7 +1434,7 @@ internal object FactoryPresets {
      */
     private fun createGilmourLeslie(): Preset {
         val enabled = mapOf(
-            0 to true,   // NoiseGate
+            0 to false,    // NoiseGate
             1 to true,   // Compressor
             2 to false, 3 to false, 4 to false,
             5 to true,   // AmpModel (Hiwatt)
@@ -1520,7 +1520,7 @@ internal object FactoryPresets {
      */
     private fun createHendrixMachineGunRhythm(): Preset {
         val enabled = mapOf(
-            0 to true,   // NoiseGate
+            0 to false,    // NoiseGate
             1 to false,  // Compressor
             2 to true,   // Wah (parked CryBaby for nasal mid coloring)
             3 to false,  // Boost
@@ -1615,7 +1615,7 @@ internal object FactoryPresets {
      */
     private fun createHendrixMachineGunLead(): Preset {
         val enabled = mapOf(
-            0 to true,   // NoiseGate
+            0 to false,    // NoiseGate
             1 to false,  // Compressor
             2 to true,   // Wah (auto-sweep for expressive lead)
             3 to false,  // Boost
@@ -1711,7 +1711,7 @@ internal object FactoryPresets {
      */
     private fun createHendrixMachineGunNeckSolo(): Preset {
         val enabled = mapOf(
-            0 to true,   // NoiseGate
+            0 to false,    // NoiseGate
             1 to false,  // Compressor
             2 to false,  // Wah (OFF for neck section)
             3 to false,  // Boost
@@ -1821,7 +1821,7 @@ internal object FactoryPresets {
      */
     private fun createHendrixChangesBOG(): Preset {
         val enabled = mapOf(
-            0 to true,   // NoiseGate
+            0 to false,    // NoiseGate
             1 to false,  // Compressor
             2 to false,  // Wah
             3 to false,  // Boost
@@ -1981,7 +1981,7 @@ internal object FactoryPresets {
      */
     private fun createFruscianteSlane(): Preset {
         val enabled = mapOf(
-            0 to true,   // NoiseGate
+            0 to false,    // NoiseGate
             1 to true,   // Compressor (OTA — CE-1 preamp)
             2 to false,  // Wah
             3 to true,   // Boost (Clean — MXR Micro Amp approximation)
@@ -2080,7 +2080,7 @@ internal object FactoryPresets {
      */
     private fun createGreenManalishi(): Preset {
         val enabled = mapOf(
-            0 to true,   // NoiseGate
+            0 to false,    // NoiseGate
             1 to false,  // Compressor
             2 to false,  // Wah
             3 to false,  // Boost
@@ -2252,7 +2252,7 @@ internal object FactoryPresets {
      */
     private fun createGreenBlues(): Preset {
         val enabled = mapOf(
-            0 to true,   // NoiseGate
+            0 to false,    // NoiseGate
             1 to false,  // Compressor
             2 to false,  // Wah
             3 to false,  // Boost
@@ -2700,7 +2700,7 @@ internal object FactoryPresets {
      */
     private fun createIronButterflyIAGDV(): Preset {
         val enabled = mapOf(
-            0 to true,   // NoiseGate
+            0 to false,    // NoiseGate
             1 to false,  // Compressor
             2 to false,  // Wah
             3 to false,  // Boost
@@ -2773,7 +2773,7 @@ internal object FactoryPresets {
      */
     private fun createIronButterflyTermination(): Preset {
         val enabled = mapOf(
-            0 to true,   // NoiseGate
+            0 to false,    // NoiseGate
             1 to false,  // Compressor
             2 to false,  // Wah
             3 to false,  // Boost
@@ -2843,7 +2843,7 @@ internal object FactoryPresets {
      */
     private fun createFruscianteFuzzrite(): Preset {
         val enabled = mapOf(
-            0 to true,   // NoiseGate
+            0 to false,    // NoiseGate
             1 to true,   // Compressor
             2 to false,  // Wah
             3 to false,  // Boost
@@ -2940,7 +2940,7 @@ internal object FactoryPresets {
      */
     private fun createRingModWarmShimmer(): Preset {
         val enabled = mapOf(
-            0 to true,   // NoiseGate
+            0 to false,    // NoiseGate
             1 to true,   // Compressor
             2 to false,  // Wah
             3 to false,  // Boost
@@ -3032,7 +3032,7 @@ internal object FactoryPresets {
      */
     private fun createRingModHarmonicTremolo(): Preset {
         val enabled = mapOf(
-            0 to true,   // NoiseGate
+            0 to false,    // NoiseGate
             1 to false,  // Compressor
             2 to false,  // Wah
             3 to false,  // Boost
@@ -3118,7 +3118,7 @@ internal object FactoryPresets {
      */
     private fun createRingModBellTones(): Preset {
         val enabled = mapOf(
-            0 to true,   // NoiseGate
+            0 to false,    // NoiseGate
             1 to true,   // Compressor
             2 to false,  // Wah
             3 to false,  // Boost
@@ -3215,7 +3215,7 @@ internal object FactoryPresets {
      */
     private fun createRingModRobotFactory(): Preset {
         val enabled = mapOf(
-            0 to true,   // NoiseGate
+            0 to false,    // NoiseGate
             1 to false,  // Compressor
             2 to false,  // Wah
             3 to false,  // Boost
@@ -3295,7 +3295,7 @@ internal object FactoryPresets {
      */
     private fun createRingModRadioTransmission(): Preset {
         val enabled = mapOf(
-            0 to true,   // NoiseGate
+            0 to false,    // NoiseGate
             1 to false,  // Compressor
             2 to false,  // Wah
             3 to false,  // Boost
@@ -3386,7 +3386,7 @@ internal object FactoryPresets {
      */
     private fun createRingModFunkClav(): Preset {
         val enabled = mapOf(
-            0 to true,   // NoiseGate
+            0 to false,    // NoiseGate
             1 to true,   // Compressor (tight snap)
             2 to false,  // Wah
             3 to false,  // Boost
@@ -3471,7 +3471,7 @@ internal object FactoryPresets {
      */
     private fun createRingModDeepSpace(): Preset {
         val enabled = mapOf(
-            0 to true,   // NoiseGate
+            0 to false,    // NoiseGate
             1 to false,  // Compressor
             2 to false,  // Wah
             3 to false,  // Boost
@@ -3565,7 +3565,7 @@ internal object FactoryPresets {
      */
     private fun createRingModOctaveUp(): Preset {
         val enabled = mapOf(
-            0 to true,   // NoiseGate
+            0 to false,    // NoiseGate
             1 to false,  // Compressor
             2 to false,  // Wah
             3 to false,  // Boost
@@ -3661,7 +3661,7 @@ internal object FactoryPresets {
      */
     private fun createRingModBrokenAmp(): Preset {
         val enabled = mapOf(
-            0 to true,   // NoiseGate
+            0 to false,    // NoiseGate
             1 to false,  // Compressor
             2 to false,  // Wah
             3 to false,  // Boost
@@ -3753,7 +3753,7 @@ internal object FactoryPresets {
      */
     private fun createTSClassicGreen(): Preset {
         val enabled = mapOf(
-            0 to true,   // NoiseGate
+            0 to false,    // NoiseGate
             1 to true,   // Compressor
             2 to false,  // Wah
             3 to false,  // Boost
@@ -3842,7 +3842,7 @@ internal object FactoryPresets {
      */
     private fun createTSEdgeOfBreakup(): Preset {
         val enabled = mapOf(
-            0 to true,   // NoiseGate
+            0 to false,    // NoiseGate
             1 to false,  // Compressor (off -- preserve pick dynamics)
             2 to false,  // Wah
             3 to false,  // Boost
@@ -3924,7 +3924,7 @@ internal object FactoryPresets {
      */
     private fun createTSTexasFlood(): Preset {
         val enabled = mapOf(
-            0 to true,   // NoiseGate
+            0 to false,    // NoiseGate
             1 to true,   // Compressor (levels string dynamics)
             2 to false,  // Wah
             3 to false,  // Boost
@@ -4013,7 +4013,7 @@ internal object FactoryPresets {
      */
     private fun createTSMidBoost(): Preset {
         val enabled = mapOf(
-            0 to true,   // NoiseGate
+            0 to false,    // NoiseGate
             1 to true,   // Compressor
             2 to false,  // Wah
             3 to false,  // Boost
@@ -4103,7 +4103,7 @@ internal object FactoryPresets {
      */
     private fun createTS9Bright(): Preset {
         val enabled = mapOf(
-            0 to true,   // NoiseGate
+            0 to false,    // NoiseGate
             1 to true,   // Compressor
             2 to false,  // Wah
             3 to false,  // Boost
@@ -4192,7 +4192,7 @@ internal object FactoryPresets {
      */
     private fun createTS9Lead(): Preset {
         val enabled = mapOf(
-            0 to true,   // NoiseGate
+            0 to false,    // NoiseGate
             1 to true,   // Compressor
             2 to false,  // Wah
             3 to false,  // Boost
@@ -4287,7 +4287,7 @@ internal object FactoryPresets {
      */
     private fun createTSStack(): Preset {
         val enabled = mapOf(
-            0 to true,   // NoiseGate
+            0 to false,    // NoiseGate
             1 to false,  // Compressor (off -- stack dynamics matter)
             2 to false,  // Wah
             3 to false,  // Boost
@@ -4373,7 +4373,7 @@ internal object FactoryPresets {
      */
     private fun createTSWarmNeck(): Preset {
         val enabled = mapOf(
-            0 to true,   // NoiseGate
+            0 to false,    // NoiseGate
             1 to true,   // Compressor
             2 to false,  // Wah
             3 to false,  // Boost
@@ -4465,7 +4465,7 @@ internal object FactoryPresets {
      */
     private fun createTSFrusciante(): Preset {
         val enabled = mapOf(
-            0 to true,   // NoiseGate
+            0 to false,    // NoiseGate
             1 to true,   // Compressor (light -- sustain without killing dynamics)
             2 to false,  // Wah
             3 to false,  // Boost
